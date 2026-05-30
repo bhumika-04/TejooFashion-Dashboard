@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8">
+<title>Tejoo Fashion – AI WhatsApp Automation: Phase 1 Technical Document</title>
+<style>
+  body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #1a1a2e; margin: 2cm 2.5cm; line-height: 1.6; }
+  h1 { font-size: 22pt; color: #4338CA; border-bottom: 3px solid #4338CA; padding-bottom: 6px; margin-top: 30px; }
+  h2 { font-size: 16pt; color: #3730A3; margin-top: 24px; border-left: 4px solid #6366F1; padding-left: 10px; }
+  h3 { font-size: 13pt; color: #4F46E5; margin-top: 18px; }
+  h4 { font-size: 11pt; color: #6366F1; margin-top: 14px; font-style: italic; }
+  p { margin: 8px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; }
+  th { background-color: #4338CA; color: white; padding: 8px 10px; text-align: left; }
+  td { border: 1px solid #C7D2FE; padding: 7px 10px; vertical-align: top; }
+  tr:nth-child(even) td { background-color: #EEF2FF; }
+  .cover { text-align: center; padding: 60px 20px; background: linear-gradient(135deg, #1e1b4b, #312e81); color: white; margin: -2cm -2.5cm 40px -2.5cm; }
+  .cover h1 { color: white; border-bottom: 2px solid #818CF8; font-size: 28pt; }
+  .cover p { font-size: 13pt; color: #C7D2FE; }
+  .badge { display: inline-block; background: #4338CA; color: white; padding: 3px 10px; border-radius: 12px; font-size: 9pt; margin: 2px; }
+  .warning { background: #FEF3C7; border-left: 4px solid #F59E0B; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger  { background: #FEE2E2; border-left: 4px solid #EF4444; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .success { background: #D1FAE5; border-left: 4px solid #10B981; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .info    { background: #EEF2FF; border-left: 4px solid #6366F1; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 4px 0; }
+  .page-break { page-break-before: always; }
+  .toc li { list-style: none; padding: 3px 0; }
+  .section-number { color: #6366F1; font-weight: bold; }
+  .highlight { background: #FFF8E1; padding: 2px 4px; border-radius: 3px; }
+  .logo-area { text-align: right; color: #94A3B8; font-size: 9pt; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════ COVER PAGE ═══════════════════════════════════════ -->
+<div class="cover">
+  <p style="font-size:11pt; color:#A5B4FC; margin-bottom:6px;">CONFIDENTIAL TECHNICAL DOCUMENT</p>
+  <h1 style="border-bottom:2px solid #818CF8; font-size:26pt;">Tejoo Fashion</h1>
+  <h2 style="color:#C7D2FE; border:none; padding:0; font-size:18pt;">AI WhatsApp Automation System</h2>
+  <p style="font-size:14pt; color:#E0E7FF; margin-top:10px;">Phase 1 — Project Overview, Risks & Strategic Roadmap</p>
+  <hr style="border:1px solid #4F46E5; margin: 30px auto; width:60%;">
+  <p><strong style="color:#FCD34D;">Prepared by:</strong> <span style="color:#E0E7FF;">INDAS Analytics</span></p>
+  <p><strong style="color:#FCD34D;">Client:</strong> <span style="color:#E0E7FF;">Tejoo Fashions, Chandni Chowk, New Delhi</span></p>
+  <p><strong style="color:#FCD34D;">Date:</strong> <span style="color:#E0E7FF;">May 2026</span></p>
+  <p><strong style="color:#FCD34D;">Version:</strong> <span style="color:#E0E7FF;">1.0 — Phase 1 Delivery</span></p>
+</div>
+
+<!-- ═══════════════════════════════════════ CONTENTS ═══════════════════════════════════════ -->
+<h2>Table of Contents</h2>
+<ul class="toc">
+  <li>1. Executive Summary</li>
+  <li>2. About Tejoo Fashions</li>
+  <li>3. What We Built — Phase 1 Dashboard</li>
+  <li>4. ERP Integration Context</li>
+  <li>5. Benefits of Phase 1</li>
+  <li>6. Limitations — Honest Assessment</li>
+  <li>7. Risk Analysis</li>
+  <li>8. Strategic Recommendation — Mobile PWA Ecosystem</li>
+  <li>9. Phase 1 Technical Roadmap (Detailed)</li>
+  <li>10. Technology Stack</li>
+  <li>11. Proposed Phase 2 — 4 Mobile PWA Apps</li>
+  <li>12. Comparison: Phase 1 vs Phase 2</li>
+  <li>13. Roles & Responsibilities</li>
+  <li>14. Conclusion</li>
+</ul>
+
+<!-- ═══════════════════════════════════════ 1. EXEC SUMMARY ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>1. Executive Summary</h1>
+
+<div class="info">
+  <strong>Strategic Goal:</strong> "Before bringing customers into the App ecosystem, first make backend communication strong through WhatsApp + AI."
+</div>
+
+<p>Tejoo Fashions is one of India's most prestigious wholesale ethnic wear brands, established in 1965, operating 50,000 sq.ft. from Chandni Chowk, Delhi. With 40–50 active WhatsApp numbers across Sales, CRR, NBD, Collection, Manager, and Return departments, communication was fragmented, manual, and untracked.</p>
+
+<p><strong>Phase 1</strong> delivers a centralized AI-powered WhatsApp dashboard that brings all conversations under one roof, enables AI auto-responses, and provides real-time visibility for Admins and Managers.</p>
+
+<div class="warning">
+  <strong>⚠ Important:</strong> While Phase 1 delivers significant value, this document provides an <em>honest assessment</em> of the limitations of the current WhatsApp API-first approach and presents a strategic recommendation to evolve into a Mobile PWA ecosystem in Phase 2.
+</div>
+
+<!-- ═══════════════════════════════════════ 2. ABOUT ═══════════════════════════════════════ -->
+<h1>2. About Tejoo Fashions</h1>
+
+<table>
+  <tr><th>Attribute</th><th>Detail</th></tr>
+  <tr><td>Founded</td><td>1965 — Chandni Chowk, Delhi</td></tr>
+  <tr><td>Founders</td><td>Sh. Tejoo Mal Ji, Sh. Siroo Mal Ji, Sh. Radha Kishan Dass Ji, Sh. Lakhmi Chand Ji</td></tr>
+  <tr><td>Total Space</td><td>50,000 sq.ft. (Chandni Chowk + Kundli Manufacturing)</td></tr>
+  <tr><td>Products</td><td>Sarees, Kurtis, Readymade Suits, Lehengas, Ethnic Gowns, Fabric</td></tr>
+  <tr><td>ERP System</td><td>Genesis ERP — barcode-based inventory, order, payment, dispatch tracking</td></tr>
+  <tr><td>Brands</td><td>Ikshita, Beu Bella, Samskriti (launched 2022)</td></tr>
+  <tr><td>WhatsApp Numbers</td><td>40–50 active (Sales, CRR, NBD, Collection, Manager, Return)</td></tr>
+  <tr><td>B2B Platform</td><td>www.tejoofashions.co.in + VRIDDHY App (Android / iOS)</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 3. WHAT WE BUILT ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>3. What We Built — Phase 1 Dashboard</h1>
+
+<p>The Phase 1 system is a full-stack web dashboard deployed on the internal network with the following capabilities:</p>
+
+<h3>3.1 Core Features Delivered</h3>
+<table>
+  <tr><th>Feature</th><th>Description</th></tr>
+  <tr><td>Multi-Session WhatsApp</td><td>Connect 40–50 WhatsApp numbers. Each session has its own webhook URL (?sid=N), auto-reply toggle, and assigned CRR.</td></tr>
+  <tr><td>Real-Time Conversations</td><td>Live two-way messaging via SignalR. Messages appear instantly without refresh. Audio, video, image, document support.</td></tr>
+  <tr><td>AI Auto-Reply</td><td>Multi-prompt architecture: Router detects intent → Specialist prompt generates reply. All responses in JSON format.</td></tr>
+  <tr><td>ERP Intent Engine</td><td>7 AI specialists: General Query, Follow-Up, Order Status, Payment, Dispatch Info, Credit Limit, and custom intents.</td></tr>
+  <tr><td>Escalation System</td><td>Time-based auto-escalation: AI → CRR (X min) → Manager → HOD. Per-team configurable timeouts.</td></tr>
+  <tr><td>Customer Management</td><td>Customer profiles, tags (New Lead, VIP, Interested, etc.), conversation history, AI summaries.</td></tr>
+  <tr><td>Team & Role Management</td><td>Admin, HOD, Manager, CRR roles. Team hierarchy, member management, escalation chains.</td></tr>
+  <tr><td>AI Bypass List</td><td>Specific numbers (internal team, opted-out customers) can bypass AI entirely.</td></tr>
+  <tr><td>Reports & Analytics</td><td>Daily message volume, AI vs Human split, message activity heatmap, agent performance, top customers.</td></tr>
+  <tr><td>Media Handling</td><td>Images, videos, audio (voice notes), documents received and stored. Supports sending multiple images at once.</td></tr>
+  <tr><td>Mobile Responsive</td><td>Dashboard works on mobile browsers with stack navigation (session → list → chat). Click-to-call support.</td></tr>
+</table>
+
+<h3>3.2 Technical Stack (Deployed)</h3>
+<table>
+  <tr><th>Layer</th><th>Technology</th></tr>
+  <tr><td>Backend</td><td>.NET 8 (ASP.NET Core), C#, Dapper ORM</td></tr>
+  <tr><td>Frontend</td><td>Next.js 14, TypeScript, Tailwind CSS, ShadCN UI</td></tr>
+  <tr><td>Database</td><td>MS SQL Server 2022 (local: AAD87525\SQLEXPRESS)</td></tr>
+  <tr><td>Real-Time</td><td>SignalR WebSockets</td></tr>
+  <tr><td>AI</td><td>OpenAI GPT-4o-mini (multi-prompt JSON architecture)</td></tr>
+  <tr><td>WhatsApp API</td><td>Interakt (primary) + Meta Cloud API (secondary)</td></tr>
+  <tr><td>Auth</td><td>JWT (8-hour expiry), role-based access control</td></tr>
+  <tr><td>Ngrok</td><td>Tunneling for webhook exposure (development)</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 4. ERP ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>4. ERP Integration Context</h1>
+
+<div class="info">
+  Tejoo Fashions uses <strong>Genesis ERP</strong> — a barcode-driven inventory and business management system. Each product has a unique barcode that serves as its primary key across all business operations.
+</div>
+
+<h3>4.1 What Genesis ERP Tracks</h3>
+<table>
+  <tr><th>Module</th><th>Data Available</th></tr>
+  <tr><td>Product / Barcode</td><td>Barcode ID (A1201149), Product name, Fabric type, Colour, Size range (M to 3XL), Set quantity, WSP (Wholesale Price)</td></tr>
+  <tr><td>Inventory</td><td>Stock availability, Lot numbers, Reorder levels</td></tr>
+  <tr><td>Orders</td><td>Order number, Customer, Date, Status (Processing / Dispatched / Delivered), Items ordered</td></tr>
+  <tr><td>Dispatch</td><td>LR (Lorry Receipt) number, Courier name, Dispatch date, Tracking link</td></tr>
+  <tr><td>Payments</td><td>Outstanding amount, Pending bills, Payment history, Credit limit, Available balance</td></tr>
+  <tr><td>Customers</td><td>Customer ID, Phone, Address, Purchase history, Account statement</td></tr>
+</table>
+
+<h3>4.2 AI Integration with ERP</h3>
+<p>The AI system is designed to query Genesis ERP APIs and provide instant answers:</p>
+<ul>
+  <li><strong>"Is barcode A1201149 in stock?"</strong> → AI fetches stock status from ERP</li>
+  <li><strong>"What is my order status?"</strong> → AI retrieves dispatch + LR details</li>
+  <li><strong>"How much is my outstanding?"</strong> → AI fetches payment balance</li>
+  <li><strong>"Share new arrivals"</strong> → AI fetches latest products with images from S3</li>
+</ul>
+
+<div class="warning">
+  <strong>⚠ Current Status:</strong> ERP API integration is <em>architecturally designed and ready</em> in Phase 1 but requires Genesis ERP API access credentials from Tejoo Fashion team to activate live data responses. Currently, AI responses use prompt-based knowledge for general queries.
+</div>
+
+<!-- ═══════════════════════════════════════ 5. BENEFITS ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>5. Benefits of Phase 1</h1>
+
+<div class="success">
+  <strong>✅ What Phase 1 does well</strong> — These are genuine, measurable benefits already working in production.
+</div>
+
+<table>
+  <tr><th>#</th><th>Benefit</th><th>Business Impact</th></tr>
+  <tr><td>1</td><td>Centralized visibility</td><td>Admin can see ALL 40+ WhatsApp conversations in one screen. No more asking "Did you reply to this customer?"</td></tr>
+  <tr><td>2</td><td>AI handles routine queries 24/7</td><td>General questions (catalogue, pricing range, address, working hours) answered instantly, even at midnight.</td></tr>
+  <tr><td>3</td><td>Response time tracking</td><td>SLA timers on each conversation. If CRR doesn't reply in 30 min → auto-escalates to Manager.</td></tr>
+  <tr><td>4</td><td>Team accountability</td><td>Every message is logged with agent name, timestamp, and response time. Performance reports available.</td></tr>
+  <tr><td>5</td><td>Customer tagging & history</td><td>Tag customers as VIP, New Lead, Hot Lead. Full conversation history visible across all sessions.</td></tr>
+  <tr><td>6</td><td>Media management</td><td>Images, videos, voice notes all captured and stored. Agents can send multiple product images at once.</td></tr>
+  <tr><td>7</td><td>Role-based access</td><td>CRR sees only their assigned conversations. Manager sees their team. Admin sees everything.</td></tr>
+  <tr><td>8</td><td>Forward & share</td><td>Forward any message to multiple conversations — useful for sharing product images to many customers at once.</td></tr>
+  <tr><td>9</td><td>Quick Replies</td><td>Pre-defined templates for common responses. CRR can reply in 1 click.</td></tr>
+  <tr><td>10</td><td>No customer app needed (yet)</td><td>Customers continue using WhatsApp as normal. No learning curve, no app install required.</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 6. LIMITATIONS ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>6. Limitations — Honest Assessment</h1>
+
+<div class="danger">
+  <strong>⚠ Read This Section Carefully.</strong> The following are genuine, architectural limitations of the WhatsApp API-first approach. These are not bugs — they are fundamental constraints of how WhatsApp Business API works.
+</div>
+
+<h2>6.1 Critical Limitation: Agent Messages Not Captured</h2>
+<div class="danger">
+  <strong>🚨 THE MOST IMPORTANT LIMITATION:</strong><br>
+  When a CRR or Sales person replies from their <strong>mobile phone WhatsApp app or Interakt's native dashboard</strong>, that reply is <strong>NOT captured</strong> in our system. Only messages sent through the Tejoo Dashboard are tracked.<br><br>
+  <strong>Why?</strong> Interakt does not provide any webhook or API to fetch messages sent by agents. This is a confirmed limitation of their platform — confirmed by their official API documentation and Postman collection.<br><br>
+  <strong>Business Impact:</strong> Performance metrics (response time, message count) are only accurate for agents who exclusively use the Tejoo Dashboard to reply. Agents on mobile create a "blind spot" in analytics.
+</div>
+
+<h2>6.2 All Limitations Summary</h2>
+<table>
+  <tr><th>#</th><th>Limitation</th><th>Root Cause</th><th>Business Impact</th></tr>
+  <tr><td>1</td><td>Agent mobile replies not tracked</td><td>Interakt API does not expose outbound message webhooks</td><td>🔴 High — performance data incomplete</td></tr>
+  <tr><td>2</td><td>No conversation history pull</td><td>Interakt has no GET API for chat history. Only real-time webhooks.</td><td>🔴 High — cannot see past conversations</td></tr>
+  <tr><td>3</td><td>Interakt cost increases with scale</td><td>Interakt charges per session/message above threshold</td><td>🟡 Medium — costs grow with volume</td></tr>
+  <tr><td>4</td><td>AI 0% rate currently</td><td>ERP APIs not yet connected. AI gives generic responses.</td><td>🟡 Medium — reduces AI value proposition</td></tr>
+  <tr><td>5</td><td>Ngrok dependency</td><td>Production requires a fixed public URL, not ngrok</td><td>🟡 Medium — URL changes on restart</td></tr>
+  <tr><td>6</td><td>No WhatsApp voice/video calls</td><td>Meta/WhatsApp Business API does not support voice/video calls</td><td>🟡 Medium — agents must switch to phone</td></tr>
+  <tr><td>7</td><td>Media URLs expire</td><td>Interakt CDN URLs have SAS tokens (currently valid till 2031)</td><td>🟢 Low — not immediate but future risk</td></tr>
+  <tr><td>8</td><td>24-hour window restriction</td><td>WhatsApp policy: cannot initiate messages unless customer messaged first within 24h</td><td>🟡 Medium — limits outbound campaigns</td></tr>
+  <tr><td>9</td><td>No read receipts for all messages</td><td>WhatsApp only sends delivery/read status for template messages via API</td><td>🟢 Low — minor UX gap</td></tr>
+  <tr><td>10</td><td>Single-device limitation per number</td><td>WhatsApp Business API and mobile app cannot run simultaneously on same number</td><td>🟡 Medium — agents must choose one or the other</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 7. RISK ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>7. Risk Analysis</h1>
+
+<h2>7.1 Technical Risks</h2>
+<table>
+  <tr><th>Risk</th><th>Probability</th><th>Severity</th><th>Mitigation</th></tr>
+  <tr><td>Interakt changes API or pricing model</td><td>Medium</td><td>High</td><td>Design system to switch to Meta Cloud API directly</td></tr>
+  <tr><td>WhatsApp account banned (spam detection)</td><td>Low</td><td>Critical</td><td>Use only conversational messages, not bulk broadcast</td></tr>
+  <tr><td>ERP API integration delays</td><td>High</td><td>High</td><td>AI works in fallback mode until ERP APIs available</td></tr>
+  <tr><td>Ngrok URL change breaks webhooks</td><td>High</td><td>Medium</td><td>Deploy on AWS EC2 with fixed IP + proper domain</td></tr>
+  <tr><td>Agent adoption resistance</td><td>High</td><td>High</td><td>Training + making dashboard better than mobile app UX</td></tr>
+</table>
+
+<h2>7.2 Business Risks</h2>
+<table>
+  <tr><th>Risk</th><th>Assessment</th></tr>
+  <tr><td>Dependency on third-party API (Interakt)</td><td>🔴 HIGH RISK — any pricing change, outage, or policy update directly impacts the entire system</td></tr>
+  <tr><td>Incomplete analytics due to mobile replies</td><td>🟡 MEDIUM — management cannot make decisions based on incomplete data</td></tr>
+  <tr><td>No customer-facing product experience</td><td>🟡 MEDIUM — customers cannot browse, order, or track on their own</td></tr>
+  <tr><td>Scalability ceiling</td><td>🟡 MEDIUM — WhatsApp API limits concurrent messages; 40-50 numbers is manageable but growth requires more numbers</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 8. RECOMMENDATION ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>8. Strategic Recommendation — Mobile PWA Ecosystem</h1>
+
+<div class="info">
+  <strong>Our Honest Recommendation:</strong> Phase 1 is a valuable foundation, but for long-term scalability, data ownership, and true digital transformation, Tejoo Fashion must evolve to a <strong>4-App Mobile PWA Ecosystem</strong> in Phase 2.
+</div>
+
+<h2>8.1 Why We Recommend the Shift</h2>
+<table>
+  <tr><th>Reason</th><th>Explanation</th></tr>
+  <tr><td>Full data ownership</td><td>With your own app, you own ALL data — conversations, orders, media, customer behavior. No third-party dependency.</td></tr>
+  <tr><td>All agent messages tracked</td><td>Every reply from every agent goes through YOUR system. 100% accurate performance analytics.</td></tr>
+  <tr><td>No API cost escalation</td><td>Your own backend. No per-message fees to Interakt. Cost is fixed (server hosting only).</td></tr>
+  <tr><td>Richer customer experience</td><td>Customers can browse catalogue, check order status, make payments — all from one app.</td></tr>
+  <tr><td>ERP deeply integrated</td><td>Barcode scanning, real-time stock, order placement — all connected directly to Genesis ERP.</td></tr>
+  <tr><td>Voice & video calling</td><td>WebRTC-based calling built into the app. No WhatsApp dependency for calls.</td></tr>
+  <tr><td>Offline capability</td><td>PWA works offline. Sales reps can browse catalogue, take orders even without internet.</td></tr>
+  <tr><td>Push notifications</td><td>Real push notifications to every agent's phone for new orders, payments, escalations.</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 9. PHASE 1 ROADMAP ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>9. Phase 1 Technical Roadmap (Detailed)</h1>
+
+<h2>9.1 Scope & Deliverables</h2>
+
+<h3>Deliverable 1 — WhatsApp AI Automation System</h3>
+<ul>
+  <li>Multi-Number Integration: ≈ 40–50 active numbers (Sales, CRR, NBD, Collection, Manager, Return)</li>
+  <li>Conversation-Based API: Two-way real-time messaging</li>
+  <li>AI Chat Engine: Fetch ERP data for order status, payment reminders, dispatch, returns</li>
+  <li>AI Training Set: 10 core intents (Order, Payment, Dispatch, Return, Credit Limit, Catalogue, Offer, New Arrival, Follow-up, General Query)</li>
+  <li>Context Retention: Last 10 messages per thread (English + Hindi hybrid)</li>
+  <li>Escalation Matrix: Auto-route unresolved queries to the right CRR / Sales / Manager</li>
+  <li>Reporting: Daily conversation log + AI accuracy tracking (≥ 80%)</li>
+</ul>
+
+<h3>Deliverable 2 — Admin / Coordinator Dashboard</h3>
+<ul>
+  <li>QR Scan & Onboarding: Register each number to a role (Sales, CRR, Collection, etc.)</li>
+  <li>Live Chat View: Connected status, pending replies, escalations</li>
+  <li>User & Role Mapping: Customer ↔ CRR ↔ Sales ↔ Manager</li>
+  <li>Action Center: Ping alerts for response delay (1/3 min)</li>
+  <li>Analytics: Chat volume, response time, top queries for AI improvement</li>
+</ul>
+
+<h3>Deliverable 3 — ERP API Integration</h3>
+<ul>
+  <li>Connect to existing Genesis ERP APIs (order, payment, credit limit)</li>
+  <li>Integrate data into AI replies ("Your order #1234 is dispatched")</li>
+  <li>Target latency &lt; 10 seconds end-to-end</li>
+</ul>
+
+<h3>Deliverable 4 — AI Context & Conversation Memory</h3>
+<ul>
+  <li>Redis-based session memory (stores last 10 messages per thread)</li>
+  <li>Local SLM ready architecture for future on-prem deployment</li>
+  <li>GPU workstation setup: 16 GB RAM + 8 GB GPU minimum</li>
+</ul>
+
+<h2>9.2 Execution Plan (4 Weeks)</h2>
+<table>
+  <tr><th>Week</th><th>Focus Area</th><th>Key Milestones</th></tr>
+  <tr><td>Week 1 (1–7 Nov)</td><td>Foundation & Onboarding</td><td>Finalize roles + customer matrix • QR scan & user creation module • Escalation matrix • Dashboard UI finalization</td></tr>
+  <tr><td>Week 2 (8–14 Nov)</td><td>WhatsApp API & AI Core</td><td>Integrate conversation API • Chat reading engine • Train AI (10 intents) • Activate ERP (order, credit limit)</td></tr>
+  <tr><td>Week 3 (15–21 Nov)</td><td>Dashboard & Memory</td><td>Coordinator dashboard • Redis session memory • ERP integration • UAT for Sales/CRR/Collection</td></tr>
+  <tr><td>Week 4 (22–30 Nov)</td><td>Testing & Stabilization</td><td>End-to-end testing • Load 200 parallel chats • AI accuracy ≥ 80% • Phase 1 handover + demo</td></tr>
+</table>
+
+<h2>9.3 Completion Criteria</h2>
+<ul>
+  <li>✅ All WhatsApp numbers connected via API</li>
+  <li>✅ AI responds to basic queries from ERP data</li>
+  <li>✅ Coordinator dashboard live with user + chat logs</li>
+  <li>✅ Escalation matrix working across teams</li>
+  <li>✅ AI accuracy ≥ 80%, latency ≤ 1 sec</li>
+  <li>✅ Daily conversation report available</li>
+</ul>
+
+<h2>9.4 AI Implementation Approach</h2>
+<table>
+  <tr><th>Stage</th><th>Method</th><th>Details</th></tr>
+  <tr><td>Intent Detection</td><td>Rule + LLM hybrid</td><td>Regex first → LLM fallback for 10 intents. Returns JSON: {intent, reason, confidence}</td></tr>
+  <tr><td>Response Generation</td><td>Specialist prompt</td><td>7 specialist prompts (general_query, follow_up, order_status, payment_outstanding, dispatch_info, credit_limit)</td></tr>
+  <tr><td>Escalation Logic</td><td>Confidence + Sentiment</td><td>Escalate if confidence &lt; 0.6 or negative tone detected</td></tr>
+  <tr><td>Context Memory</td><td>Redis List (10 entries)</td><td>Maintains conversation continuity per thread</td></tr>
+  <tr><td>Media Handling</td><td>CDN URL storage</td><td>Images/videos stored as Interakt CDN URLs (5-year expiry)</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 10. TECH STACK ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>10. Technology Stack</h1>
+
+<table>
+  <tr><th>Layer</th><th>Technology</th><th>Purpose</th></tr>
+  <tr><td>Backend Framework</td><td>.NET 8 (LTS)</td><td>Core microservices for Gateway, AI Orchestrator, ERP Bridge</td></tr>
+  <tr><td>Language</td><td>C#</td><td>High-performance, type-safe backend development</td></tr>
+  <tr><td>Frontend</td><td>Next.js 14 + React 18 + Tailwind + ShadCN UI</td><td>Responsive Admin Dashboard optimized for tablet & desktop</td></tr>
+  <tr><td>Database</td><td>MS SQL Server 2022</td><td>Main transaction DB (consistent with existing ERP stack)</td></tr>
+  <tr><td>Cache / Memory</td><td>Redis 7 LTS</td><td>Chat context and session memory (10 messages per thread)</td></tr>
+  <tr><td>Storage</td><td>AWS S3 Buckets</td><td>Full HD photo storage + tagging for recommendation engine</td></tr>
+  <tr><td>AI Engine</td><td>OpenAI GPT-4o mini</td><td>Intent detection & response generation (multi-prompt JSON)</td></tr>
+  <tr><td>Local AI Option</td><td>Phi-3 / LLaMA 3 8B (Ollama)</td><td>Future on-prem SLM for offline use and cost reduction</td></tr>
+  <tr><td>Real-time Comms</td><td>SignalR</td><td>Live chat updates, escalation alerts, conversation group subscriptions</td></tr>
+  <tr><td>Job Scheduler</td><td>Hangfire / Quartz.NET</td><td>Generate daily chat + sentiment reports</td></tr>
+  <tr><td>Version Control</td><td>GitHub + Docker</td><td>CI/CD pipeline and containerized deployment</td></tr>
+  <tr><td>Infrastructure</td><td>AWS EC2 / On-prem GPU Server</td><td>Host backend + Redis + local SLM models</td></tr>
+  <tr><td>WhatsApp API</td><td>Interakt + Meta Cloud API</td><td>Webhook-based messaging (inbound + AI outbound)</td></tr>
+</table>
+
+<h2>10.1 Backend Module Architecture</h2>
+<table>
+  <tr><th>Module</th><th>Description</th></tr>
+  <tr><td>Indas.WhatsappGateway.Api</td><td>Handles message ingestion + delivery to AI</td></tr>
+  <tr><td>Indas.AIOrchestrator.Api</td><td>Detects intent, fetches ERP data, creates response</td></tr>
+  <tr><td>Indas.ErpBridge.Api</td><td>Wraps Genesis ERP APIs (order, payment, credit)</td></tr>
+  <tr><td>Indas.Shared</td><td>DTOs, constants, result wrappers</td></tr>
+  <tr><td>Indas.Infrastructure</td><td>EF Core, Redis, logging, config management</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 11. PHASE 2 PWA ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>11. Proposed Phase 2 — 4 Mobile PWA Apps</h1>
+
+<div class="info">
+  <strong>PWA (Progressive Web App)</strong> is a website that behaves like a native mobile app — installable from browser, works offline, supports push notifications, and costs significantly less than building separate Android/iOS apps.
+</div>
+
+<h2>11.1 App 1 — Owner App</h2>
+<div class="success">
+  <strong>User:</strong> Tejoo Fashion Owners / Directors / HODs
+</div>
+<table>
+  <tr><th>Feature</th><th>Description</th></tr>
+  <tr><td>Executive Dashboard</td><td>Real-time revenue, top customers, team performance, daily order value</td></tr>
+  <tr><td>All Conversations View</td><td>Read-only access to all WhatsApp conversations across all teams</td></tr>
+  <tr><td>AI Analytics</td><td>AI accuracy, escalation rates, response times per team</td></tr>
+  <tr><td>ERP Summary</td><td>Today's orders, dispatch pending, payment outstanding, stock alerts</td></tr>
+  <tr><td>Team Monitoring</td><td>See which agents are online, response lag, unresolved escalations</td></tr>
+  <tr><td>Reports</td><td>PDF/Excel reports on demand — daily, weekly, monthly</td></tr>
+  <tr><td>Notifications</td><td>Push alerts for critical escalations, high-value customer queries, payment alerts</td></tr>
+</table>
+
+<h2>11.2 App 2 — Internal Team App</h2>
+<div class="success">
+  <strong>Users:</strong> Sales Managers, CRR, Coordinators, Collection Team, Dispatch Team
+</div>
+<table>
+  <tr><th>Feature</th><th>Description</th></tr>
+  <tr><td>My Conversations</td><td>See only assigned customer conversations. Reply from app — all messages tracked.</td></tr>
+  <tr><td>Quick Replies</td><td>One-tap templates for common responses (dispatch update, payment reminder, catalogue share)</td></tr>
+  <tr><td>Media Send</td><td>Send product images/videos directly. Barcode scan to attach product details.</td></tr>
+  <tr><td>Barcode Scanner</td><td>Scan product barcode → instantly see stock, sizes, WSP, availability</td></tr>
+  <tr><td>Customer Profile</td><td>Full customer history, tags, outstanding amount, previous orders</td></tr>
+  <tr><td>Escalation Alerts</td><td>Real push notifications when customer escalated to them. Timer visible.</td></tr>
+  <tr><td>Voice & Video Call</td><td>WebRTC-based calling. Call customer directly from app — no number sharing needed.</td></tr>
+  <tr><td>Task Management</td><td>Follow-up tasks, reminders, pending actions per customer</td></tr>
+  <tr><td>Offline Mode</td><td>Browse customer list and product catalogue offline. Sync when connected.</td></tr>
+</table>
+
+<h2>11.3 App 3 — Vendor App</h2>
+<div class="success">
+  <strong>Users:</strong> Wholesale Vendors, Shop Owners, Retail Buyers
+</div>
+<table>
+  <tr><th>Feature</th><th>Description</th></tr>
+  <tr><td>Product Catalogue</td><td>Browse full catalogue with images, barcode, fabric, sizes, WSP. Filter by category/fabric/colour.</td></tr>
+  <tr><td>Barcode Lookup</td><td>Scan or enter barcode → see product details, availability, price</td></tr>
+  <tr><td>Order Placement</td><td>Place orders directly. Select product, size, quantity. Submit to ERP.</td></tr>
+  <tr><td>Order Tracking</td><td>Real-time status: Processing → Dispatched → LR Number → Delivered</td></tr>
+  <tr><td>Payment</td><td>View outstanding amount, pending bills, pay via UPI/NEFT. Upload payment proof.</td></tr>
+  <tr><td>Credit Limit</td><td>See available credit balance, last payment date, account statement</td></tr>
+  <tr><td>Chat with CRR</td><td>In-app chat with assigned CRR. All messages tracked in the system.</td></tr>
+  <tr><td>New Arrivals</td><td>Push notification when new collections arrive. Add to wishlist.</td></tr>
+  <tr><td>Return / Exchange</td><td>Raise return request with photo evidence. Track return status.</td></tr>
+  <tr><td>Offline Catalogue</td><td>Download catalogue for offline browsing. Useful during exhibitions.</td></tr>
+</table>
+
+<h2>11.4 App 4 — Customer App</h2>
+<div class="success">
+  <strong>Users:</strong> End Consumers, Retail Customers (Future Phase)
+</div>
+<table>
+  <tr><th>Feature</th><th>Description</th></tr>
+  <tr><td>Product Discovery</td><td>Browse ethnic wear catalogue. AI-powered recommendations based on preferences.</td></tr>
+  <tr><td>Virtual Try-On (AI)</td><td>AI suggests matching sets based on occasion, colour preference, budget</td></tr>
+  <tr><td>Order & Track</td><td>Place order, track delivery, view order history</td></tr>
+  <tr><td>Chat Support</td><td>Live chat with Tejoo team. AI handles routine queries, humans for complex ones.</td></tr>
+  <tr><td>Loyalty Program</td><td>Points per purchase, referral rewards, special member discounts</td></tr>
+  <tr><td>Wishlist & Reminders</td><td>Save favourite products. Get notified when back in stock or on sale.</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 12. COMPARISON ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>12. Comparison: Phase 1 (Current) vs Phase 2 (PWA)</h1>
+
+<table>
+  <tr><th>Feature / Capability</th><th>Phase 1 (WhatsApp Dashboard)</th><th>Phase 2 (PWA Ecosystem)</th></tr>
+  <tr><td>Agent messages tracked</td><td>❌ Only if sent from dashboard</td><td>✅ 100% — all via app</td></tr>
+  <tr><td>Chat history</td><td>❌ Only what webhook captured</td><td>✅ Full history in DB</td></tr>
+  <tr><td>Customer experience</td><td>📱 WhatsApp only</td><td>🌟 Dedicated app with catalogue, orders, tracking</td></tr>
+  <tr><td>Voice/Video calls</td><td>❌ Not possible via API</td><td>✅ WebRTC built-in</td></tr>
+  <tr><td>Performance analytics</td><td>⚠ Partial (missing mobile replies)</td><td>✅ Complete end-to-end</td></tr>
+  <tr><td>ERP integration depth</td><td>⚠ API-level, limited</td><td>✅ Full barcode, stock, order integration</td></tr>
+  <tr><td>Cost at scale</td><td>🔴 Grows with Interakt usage</td><td>✅ Fixed hosting cost</td></tr>
+  <tr><td>Third-party dependency</td><td>🔴 Interakt + Meta policies</td><td>✅ Fully owned system</td></tr>
+  <tr><td>Offline capability</td><td>❌ Requires internet</td><td>✅ PWA offline mode</td></tr>
+  <tr><td>Push notifications</td><td>⚠ Dashboard only (web push)</td><td>✅ Native push on all devices</td></tr>
+  <tr><td>Barcode scan</td><td>❌ Not integrated</td><td>✅ Built into all apps</td></tr>
+  <tr><td>Data ownership</td><td>⚠ Shared with Interakt</td><td>✅ 100% owned by Tejoo</td></tr>
+  <tr><td>Customer self-service</td><td>❌ Requires agent intervention</td><td>✅ Vendor App is fully self-service</td></tr>
+  <tr><td>Time to build</td><td>✅ Done (Phase 1 complete)</td><td>⚠ 3–4 months per app</td></tr>
+  <tr><td>Setup cost</td><td>✅ Lower initial cost</td><td>⚠ Higher initial investment</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 13. ROLES ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>13. Roles & Responsibilities</h1>
+
+<table>
+  <tr><th>Entity</th><th>Phase 1 Responsibility</th><th>Phase 2 Responsibility</th></tr>
+  <tr><td><strong>Tejoo Fashion</strong></td><td>Share WhatsApp number list, customer allocation matrix, Genesis ERP API access, nominate test users, train agents on dashboard</td><td>Approve UI/UX designs, provide customer data for migration, test Vendor App with select vendors, share product catalogue data for PWA</td></tr>
+  <tr><td><strong>INDAS Analytics</strong></td><td>Develop WhatsApp AI tool & dashboard, integrate ERP APIs, train AI responses, conduct testing, provide training, maintain system</td><td>Design and build 4 PWA apps, deep ERP integration, AI recommendations, barcode integration, deploy on production servers</td></tr>
+</table>
+
+<h2>13.1 User Roles in Current System</h2>
+<table>
+  <tr><th>Role</th><th>Access Level</th><th>Scope</th></tr>
+  <tr><td>Admin</td><td>Full access</td><td>All sessions, all conversations, all settings, all reports</td></tr>
+  <tr><td>HOD</td><td>Team + full reports</td><td>Their department + escalations to them</td></tr>
+  <tr><td>Manager</td><td>Team conversations + reports</td><td>Assigned team's conversations and escalations</td></tr>
+  <tr><td>CRR (Sales Rep)</td><td>Own conversations only</td><td>Only assigned conversations, no delete/edit controls</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════ 14. CONCLUSION ═══════════════════════════════════════ -->
+<div class="page-break"></div>
+<h1>14. Conclusion</h1>
+
+<h2>14.1 What Phase 1 Achieved</h2>
+<div class="success">
+  Phase 1 successfully delivers a centralized, AI-powered communication hub for Tejoo Fashion's 40+ WhatsApp numbers. It eliminates conversation silos, provides management visibility, enables AI auto-responses, and creates accountability across teams. This is a strong foundation.
+</div>
+
+<h2>14.2 The Hard Truth</h2>
+<div class="danger">
+  Phase 1 is built on top of WhatsApp Business API via a third-party intermediary (Interakt). This means Tejoo Fashion is dependent on Interakt's pricing, policies, and API limitations — including the critical gap that <strong>mobile phone replies are invisible to the system</strong>. Agents who don't change their behavior make the analytics incomplete and the AI less effective.
+</div>
+
+<h2>14.3 The Path Forward</h2>
+<div class="info">
+  <strong>Our Recommendation:</strong>
+  <ol>
+    <li><strong>Complete Phase 1 fully</strong> — Connect all 40+ numbers, activate ERP APIs, train agents to use dashboard</li>
+    <li><strong>Run Phase 1 for 3 months</strong> — Collect data, identify patterns, prove ROI</li>
+    <li><strong>Start Phase 2 design</strong> — Begin with <strong>Internal Team App</strong> first (highest immediate value)</li>
+    <li><strong>Roll out Vendor App</strong> — Give vendors self-service capability</li>
+    <li><strong>Phase 2 fully replaces Phase 1</strong> — WhatsApp notifications become push notifications in the app</li>
+  </ol>
+</div>
+
+<h2>14.4 Key Message</h2>
+<p style="font-size:13pt; text-align:center; color:#4338CA; font-weight:bold; border:2px solid #6366F1; padding:20px; border-radius:8px; margin:20px 0;">
+  "WhatsApp is where your customers are today.<br>
+  Your own app is where your business needs to be tomorrow.<br>
+  Phase 1 builds the bridge. Phase 2 builds the destination."
+</p>
+
+<hr style="border:1px solid #E0E7FF; margin:40px 0;">
+<p style="text-align:center; color:#94A3B8; font-size:9pt;">
+  <strong>Prepared by INDAS Analytics</strong> | Confidential — For Tejoo Fashion Internal Use Only<br>
+  Document Version 1.0 | May 2026 | All technical specifications subject to change based on requirements
+</p>
+
+</body>
+</html>
