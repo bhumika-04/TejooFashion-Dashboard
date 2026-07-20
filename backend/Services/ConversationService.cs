@@ -16,6 +16,8 @@ public class ConversationService
     private readonly OpenAiClient _openAiClient;
     private readonly NotificationService _notificationService;
     private readonly CustomerRepository _customerRepo;
+    private readonly TagRepository _tagRepo;
+    private readonly EscalationRepository _escalationRepo;
 
     public ConversationService(
         ConversationRepository conversationRepo,
@@ -25,7 +27,9 @@ public class ConversationService
         ConversationSummaryRepository summaryRepo,
         OpenAiClient openAiClient,
         NotificationService notificationService,
-        CustomerRepository customerRepo)
+        CustomerRepository customerRepo,
+        TagRepository tagRepo,
+        EscalationRepository escalationRepo)
     {
         _conversationRepo = conversationRepo;
         _messageRepo = messageRepo;
@@ -35,6 +39,8 @@ public class ConversationService
         _openAiClient = openAiClient;
         _notificationService = notificationService;
         _customerRepo = customerRepo;
+        _tagRepo = tagRepo;
+        _escalationRepo = escalationRepo;
     }
 
     public async Task<ConversationDetailDTO?> GetConversationDetailAsync(int id)
@@ -64,14 +70,18 @@ public class ConversationService
         };
     }
 
+    public Task<ConversationCounts> GetCountsAsync(int? assignedUserId = null, int? sessionId = null, int? viewerUserId = null)
+        => _conversationRepo.GetCountsAsync(assignedUserId, sessionId, viewerUserId);
+
     public async Task<List<ConversationListDTO>> GetAllConversationsAsync(
         string? status = null,
         int? assignedUserId = null,
         int? sessionId = null,
         int limit = 100,
-        int offset = 0)
+        int offset = 0,
+        int? viewerUserId = null)
     {
-        var rows = await _conversationRepo.GetAllWithLastMessageAsync(status, assignedUserId, sessionId, limit, offset);
+        var rows = await _conversationRepo.GetAllWithLastMessageAsync(status, assignedUserId, sessionId, limit, offset, viewerUserId);
 
         return rows.Select(row => new ConversationListDTO
         {
@@ -86,11 +96,18 @@ public class ConversationService
             SessionDisplayName = row.SessionDisplayName ?? row.SessionPhoneNumber ?? "",
             LastMessageAt = row.LastMessageAt,
             LastMessagePreview = row.LastMessageContent,
-            UnreadCount = 0,
+            IsUnread = row.IsUnread,
+            HasAiMessages = row.HasAiMessages,
             CreatedAt = row.CreatedAt,
             ClosedAt = row.ClosedAt
         }).ToList();
     }
+
+    public Task MarkViewedAsync(int conversationId, int userId)
+        => _conversationRepo.MarkViewedAsync(conversationId, userId);
+
+    public Task<List<SessionConvCount>> GetCountsBySessionAsync(int? assignedUserId = null)
+        => _conversationRepo.GetCountsBySessionAsync(assignedUserId);
 
     public async Task<Conversation?> GetOrCreateConversationAsync(int sessionId, string customerPhone, string? customerName = null)
     {
@@ -138,7 +155,21 @@ public class ConversationService
 
     public async Task<bool> UpdateConversationStatusAsync(int id, string status)
     {
-        return await _conversationRepo.UpdateStatusAsync(id, status);
+        var ok = await _conversationRepo.UpdateStatusAsync(id, status);
+
+        if (ok && string.Equals(status, "Closed", StringComparison.OrdinalIgnoreCase))
+        {
+            // Resolve any active escalation so the timeout matrix stops bumping/notifying on it.
+            try { await _escalationRepo.ResolveActiveByConversationAsync(id, "Auto-resolved: conversation closed"); }
+            catch { /* best-effort */ }
+
+            // Generate its summary immediately so the agent who closed it (and the customer profile)
+            // sees an up-to-date recap. Best-effort.
+            try { await GenerateSummaryAsync(id); }
+            catch { /* no messages / AI unavailable — the background summarizer will retry */ }
+        }
+
+        return ok;
     }
 
     public async Task<bool> DeleteConversationAsync(int id)
@@ -177,6 +208,53 @@ public class ConversationService
         return true;
     }
 
+    /// <summary>
+    /// Applies one action ("close" | "assign" | "tag") to many conversations.
+    /// Returns the number successfully affected. Best-effort per id — one failure doesn't abort the rest.
+    /// </summary>
+    public async Task<int> BulkActionAsync(IEnumerable<int> ids, string action, int? userId, int? tagId)
+    {
+        var affected = 0;
+        foreach (var id in ids.Distinct())
+        {
+            try
+            {
+                var ok = action switch
+                {
+                    // Bulk close updates status directly — it deliberately does NOT generate an AI
+                    // summary per conversation (that would be one OpenAI call each, synchronously).
+                    // The background ConversationSummaryService picks closed conversations up instead.
+                    "close"  => await CloseWithoutSummaryAsync(id),
+                    "assign" when userId is > 0 => await AssignConversationAsync(id, userId.Value),
+                    "tag"    when tagId  is > 0 => await TagConversationAsync(id, tagId.Value),
+                    _ => false,
+                };
+                if (ok) affected++;
+            }
+            catch { /* skip this id, keep going */ }
+        }
+        return affected;
+    }
+
+    // Closes a conversation without the synchronous AI summary (used by bulk close) but still
+    // resolves any active escalation so the timeout matrix stops bumping a closed conversation.
+    private async Task<bool> CloseWithoutSummaryAsync(int id)
+    {
+        var ok = await _conversationRepo.UpdateStatusAsync(id, "Closed");
+        if (ok)
+        {
+            try { await _escalationRepo.ResolveActiveByConversationAsync(id, "Auto-resolved: conversation closed"); }
+            catch { /* best-effort */ }
+        }
+        return ok;
+    }
+
+    private async Task<bool> TagConversationAsync(int conversationId, int tagId)
+    {
+        await _tagRepo.AddToConversationAsync(conversationId, tagId, null);
+        return true;
+    }
+
     public async Task<List<ConversationListDTO>> SearchConversationsAsync(string query, int limit = 30, int? assignedUserId = null)
     {
         var rows = await _conversationRepo.SearchAsync(query, limit, assignedUserId);
@@ -193,7 +271,7 @@ public class ConversationService
             SessionDisplayName = row.SessionDisplayName ?? row.SessionPhoneNumber ?? "",
             LastMessageAt = row.LastMessageAt,
             LastMessagePreview = row.LastMessageContent,
-            UnreadCount = 0,
+            HasAiMessages = row.HasAiMessages,
             CreatedAt = row.CreatedAt,
             ClosedAt = row.ClosedAt
         }).ToList();
@@ -247,6 +325,19 @@ public class ConversationService
         };
 
         await _summaryRepo.UpsertAsync(entity);
+
+        // Sentiment-driven prioritization: a clearly negative conversation is raised to High
+        // priority and tagged Complaint so it surfaces for follow-up.
+        if (sentiment.HasValue && sentiment.Value <= AiHeuristics.ComplaintSentimentThreshold)
+        {
+            try
+            {
+                await _conversationRepo.UpdatePriorityAsync(conversationId, "High");
+                var tagId = await _tagRepo.GetOrCreateByNameAsync("Complaint", "conversation", AiHeuristics.TagColor("Complaint"));
+                await _tagRepo.AddToConversationAsync(conversationId, tagId, null);
+            }
+            catch { /* best-effort — never fail summary generation over a tag/priority update */ }
+        }
 
         return new ConversationSummaryDTO
         {

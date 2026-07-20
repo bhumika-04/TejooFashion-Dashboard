@@ -46,6 +46,17 @@ export default function EscalationsPage() {
   const [editingDesc, setEditingDesc] = useState('');
   const [promptSaving, setPromptSaving] = useState(false);
   const [expandedPrompt, setExpandedPrompt] = useState<number | null>(null);
+  // Test AI Reply (dry-run preview)
+  const [testMessage, setTestMessage] = useState('');
+  const [testResult, setTestResult] = useState<any>(null);
+  const [testLoading, setTestLoading] = useState(false);
+  const runAiTest = async () => {
+    if (!testMessage.trim() || testLoading) return;
+    setTestLoading(true); setTestResult(null);
+    try { const res = await aiPromptsApi.test(testMessage.trim()); setTestResult(res.data); }
+    catch (e: any) { setTestResult({ error: e?.response?.data?.error || 'AI test failed' }); }
+    finally { setTestLoading(false); }
+  };
 
   // Bypass Numbers tab state
   const [bypassNumbers, setBypassNumbers] = useState<any[]>([]);
@@ -429,6 +440,14 @@ export default function EscalationsPage() {
     return { remaining, timeout, elapsed, breached: remaining <= 0 };
   };
 
+  // Minutes → "Xm" / "Xh Ym" / "Xd Yh" so long overdue times read as days, not huge minutes
+  const fmtMins = (m: number) => {
+    m = Math.round(m);
+    if (m < 60) return `${m}m`;
+    if (m < 1440) return `${Math.floor(m / 60)}h ${m % 60}m`;
+    return `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
+  };
+
   const LEVEL_LABELS: Record<number, { label: string; color: string }> = {
     1: { label: 'CRR',     color: 'bg-blue-100 text-blue-700'   },
     2: { label: 'Manager', color: 'bg-amber-100 text-amber-700' },
@@ -503,6 +522,51 @@ export default function EscalationsPage() {
       {/* ── AI PROMPTS TAB ───────────────────────────────────── */}
       {activeTab === 'prompts' && (
         <div className="space-y-4">
+          {/* Test AI Reply — runs the real router→specialist pipeline; nothing is sent */}
+          <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-2.5">
+              <BrainCircuit className="h-4 w-4 text-indigo-600" />
+              <h3 className="text-sm font-semibold text-gray-800">Test AI Reply</h3>
+              <span className="text-[11px] text-gray-400">preview only — nothing is sent to the customer</span>
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={testMessage}
+                onChange={e => setTestMessage(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') runAiTest(); }}
+                placeholder="Type a customer message, e.g. What is the wholesale price per piece?"
+                className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400"
+              />
+              <button
+                disabled={!testMessage.trim() || testLoading}
+                onClick={runAiTest}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition disabled:opacity-50"
+              >
+                {testLoading ? 'Running…' : 'Test'}
+              </button>
+            </div>
+            {testResult && (
+              <div className="mt-3 rounded-xl border border-gray-200 bg-white p-3 text-sm">
+                {testResult.error ? (
+                  <p className="text-red-600">{testResult.error}</p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">intent: {testResult.intent ?? '—'}</span>
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">confidence: {testResult.confidence != null ? `${Math.round(testResult.confidence * 100)}%` : '—'}</span>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        testResult.decision === 'send' ? 'bg-green-50 text-green-700'
+                        : testResult.decision === 'escalate' ? 'bg-amber-50 text-amber-700'
+                        : 'bg-gray-100 text-gray-500'}`}>
+                        {testResult.decision === 'send' ? '✅ would auto-send' : testResult.decision === 'escalate' ? '⚠ would escalate to human' : 'no reply'}
+                      </span>
+                    </div>
+                    <p className="whitespace-pre-wrap break-words text-gray-800">{testResult.reply || '(no reply text)'}</p>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           <p className="text-sm text-gray-400 mb-4">7 intent-specific prompts. Click Edit to modify the system prompt for any intent. Inactive prompts fall back to general_query.</p>
           {promptsLoading ? (
             <div className="space-y-3">{Array.from({length:7}).map((_,i) => <div key={i} className="skeleton h-20 rounded-2xl" />)}</div>
@@ -676,7 +740,8 @@ export default function EscalationsPage() {
                 <p className="text-sm text-gray-400">No bypass numbers yet</p>
               </div>
             ) : (
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px] text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 text-xs text-gray-400 uppercase tracking-wide">
                     <th className="text-left px-5 py-2">Phone</th>
@@ -721,6 +786,7 @@ export default function EscalationsPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         </div>
@@ -1242,8 +1308,8 @@ export default function EscalationsPage() {
                       }`}>
                         <Clock className="h-3.5 w-3.5 flex-shrink-0" />
                         {sla.breached
-                          ? `⚠ SLA breached ${Math.abs(sla.remaining)}m ago — escalating to next level`
-                          : `${sla.remaining}m left before escalating to ${LEVEL_LABELS[Math.min((esc.escalationLevel ?? 1) + 1, 3)]?.label ?? 'next level'}`
+                          ? `⚠ SLA breached ${fmtMins(Math.abs(sla.remaining))} ago — escalating to next level`
+                          : `${fmtMins(sla.remaining)} left before escalating to ${LEVEL_LABELS[Math.min((esc.escalationLevel ?? 1) + 1, 3)]?.label ?? 'next level'}`
                         }
                       </div>
                     );

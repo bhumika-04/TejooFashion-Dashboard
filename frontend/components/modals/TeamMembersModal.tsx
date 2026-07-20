@@ -226,7 +226,7 @@ export function TeamMembersModal({ open, onOpenChange, teamId, teamName, onMembe
                       <option value="">-- Select User --</option>
                       {availableUsers.map((user) => (
                         <option key={user.id} value={user.id}>
-                          {user.fullName} ({user.role}) - {user.email}
+                          {user.email} — {user.fullName} ({user.role})
                         </option>
                       ))}
                     </select>
@@ -327,40 +327,40 @@ export function TeamMembersModal({ open, onOpenChange, teamId, teamName, onMembe
                   {members.map((member) => (
                     <div
                       key={member.userId}
-                      className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-300 transition-colors"
+                      className="flex items-center justify-between gap-3 p-3 bg-white border border-slate-200 rounded-lg hover:border-blue-300 transition-colors"
                     >
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          <p className="font-medium text-slate-900">{member.fullName}</p>
-                          <Badge className={`text-xs border ${getRoleBadgeColor(member.roleInTeam)}`}>
+                          <p className="font-medium text-slate-900 truncate">{member.fullName}</p>
+                          <Badge className={`flex-shrink-0 text-xs border ${getRoleBadgeColor(member.roleInTeam)}`}>
                             {member.roleInTeam}
                           </Badge>
                           {!member.isActive && (
-                            <Badge className="text-xs bg-red-100 text-red-800 border-red-300">
+                            <Badge className="flex-shrink-0 text-xs bg-red-100 text-red-800 border-red-300">
                               Inactive
                             </Badge>
                           )}
                         </div>
-                        <p className="text-sm text-slate-600">{member.email}</p>
+                        <p className="text-sm text-slate-600 truncate">{member.email}</p>
                         <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
-                          <span>Joined: {formatDateOnly(member.joinedAt)}</span>
+                          <span className="flex-shrink-0">Joined: {formatDateOnly(member.joinedAt)}</span>
                           {member.managerName && (
                             <>
                               <span>•</span>
-                              <span>Reports to: {member.managerName}</span>
+                              <span className="truncate">Reports to: {member.managerName}</span>
                             </>
                           )}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-shrink-0">
                         <select
                           value={member.managerId || ''}
                           onChange={(e) => handleUpdateManager(
                             member.id,
                             e.target.value ? Number(e.target.value) : null
                           )}
-                          className="px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-40 px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                           disabled={loading}
                         >
                           <option value="">No Manager</option>
@@ -378,7 +378,7 @@ export function TeamMembersModal({ open, onOpenChange, teamId, teamName, onMembe
                           variant="outline"
                           onClick={() => handleRemoveMember(member.userId)}
                           disabled={loading}
-                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                          className="flex-shrink-0 text-red-600 hover:bg-red-50 hover:text-red-700"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>

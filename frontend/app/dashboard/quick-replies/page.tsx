@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { quickRepliesApi } from '@/services/api';
-import { Zap, Plus, Pencil, Trash2, X, Check } from 'lucide-react';
+import { Zap, Pencil, Trash2, X, Check } from 'lucide-react';
 import { useToast } from '@/components/ui/toast';
+import { FAB } from '@/components/ui/fab';
 
 const DEFAULT_CATEGORIES = ['General', 'Greeting', 'Order', 'Payment', 'Support', 'Closing'];
 
@@ -125,22 +127,6 @@ export default function QuickRepliesPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-gray-50">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Zap className="h-5 w-5 text-indigo-700" />
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Quick Replies</h1>
-            <p className="text-xs text-gray-400 mt-0.5">{replies.length} templates</p>
-          </div>
-        </div>
-        <button onClick={openCreate}
-          className="flex items-center gap-2 text-sm px-4 py-2 bg-indigo-700 text-white rounded-xl hover:bg-indigo-800 transition-colors">
-          <Plus className="h-4 w-4" />
-          New Reply
-        </button>
-      </div>
-
       {/* Category filter */}
       {allCategories.length > 1 && (
         <div className="bg-white border-b border-gray-100 px-6 py-2 flex gap-2 overflow-x-auto">
@@ -211,9 +197,9 @@ export default function QuickRepliesPage() {
         )}
       </div>
 
-      {/* Form modal */}
-      {showForm && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={closeForm}>
+      {/* Form modal (portaled to body so it sits above the app header) */}
+      {showForm && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4" onClick={closeForm}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h2 className="text-base font-bold text-gray-900">{editing ? 'Edit Quick Reply' : 'New Quick Reply'}</h2>
@@ -260,8 +246,12 @@ export default function QuickRepliesPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
+
+      {/* Floating add button — matches Sessions / Teams / Users */}
+      <FAB onClick={openCreate} label="New Reply" />
     </div>
   );
 }

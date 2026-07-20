@@ -58,36 +58,41 @@ export default function TeamHierarchyPage() {
     const nodeMap = new Map<number, TreeNode>();
     members.forEach(m => nodeMap.set(m.userId, { member: m, children: [] }));
 
-    const roots: TreeNode[] = [];
+    // The single top of the chart = highest-ranked member (tie → earliest joined / lowest id).
+    const topMember = [...members].sort(
+      (a, b) =>
+        (ROLE_RANK[a.roleInTeam] ?? 5) - (ROLE_RANK[b.roleInTeam] ?? 5) ||
+        a.userId - b.userId
+    )[0];
+    const topNode = nodeMap.get(topMember.userId)!;
 
+    // Attach every other member: to its explicit manager if valid, otherwise under the top.
+    // This guarantees ONE root so the chart never collapses into a long vertical column
+    // when managers haven't been assigned yet.
     members.forEach(m => {
+      if (m.userId === topMember.userId) return;
       const node = nodeMap.get(m.userId)!;
-      if (m.managerId && nodeMap.has(m.managerId)) {
-        nodeMap.get(m.managerId)!.children.push(node);
+      const hasValidManager =
+        m.managerId != null && m.managerId !== m.userId && nodeMap.has(m.managerId);
+      if (hasValidManager) {
+        nodeMap.get(m.managerId!)!.children.push(node);
       } else {
-        roots.push(node);
+        topNode.children.push(node);
       }
     });
 
-    // Fallback: if no manager relationships, group non-managers under the highest-ranked member
-    const hasRelationships = members.some(m => m.managerId && nodeMap.has(m.managerId));
-    if (!hasRelationships && roots.length > 1) {
-      const sorted = [...roots].sort(
-        (a, b) => (ROLE_RANK[a.member.roleInTeam] ?? 5) - (ROLE_RANK[b.member.roleInTeam] ?? 5)
-      );
-      const top = sorted[0];
-      top.children = sorted.slice(1);
-      return [top];
-    }
-
-    // Sort children within each node by role rank
+    // Sort children within each node by role rank, then name
     const sortChildren = (node: TreeNode) => {
-      node.children.sort((a, b) => (ROLE_RANK[a.member.roleInTeam] ?? 5) - (ROLE_RANK[b.member.roleInTeam] ?? 5));
+      node.children.sort(
+        (a, b) =>
+          (ROLE_RANK[a.member.roleInTeam] ?? 5) - (ROLE_RANK[b.member.roleInTeam] ?? 5) ||
+          a.member.fullName.localeCompare(b.member.fullName)
+      );
       node.children.forEach(sortChildren);
     };
-    roots.forEach(sortChildren);
+    sortChildren(topNode);
 
-    return roots;
+    return [topNode];
   };
 
   const handleRemoveMember = async (userId: number, fullName: string) => {

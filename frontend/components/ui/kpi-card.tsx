@@ -101,7 +101,8 @@ export function KPICard({
           <div className="flex items-center gap-1.5 flex-wrap mt-1">{subtitle}</div>
         )}
         {trend && (
-          <p className={`text-xs font-semibold mt-1 ${trend.isPositive ? 'text-green-600' : 'text-red-500'}`}>
+          <p className={`flex items-center gap-1 text-xs font-semibold mt-1 ${trend.isPositive ? 'text-green-600' : 'text-red-500'}`}>
+            <trend.icon className="h-3 w-3" />
             {trend.value}
           </p>
         )}

@@ -1,4 +1,3 @@
-using Dapper;
 using TejooWhatsApp.Models.Entities;
 using TejooWhatsApp.Utilities;
 
@@ -94,9 +93,11 @@ public class EscalationRepository
         using var conn = _db.CreateConnection();
         var sql = @"
             INSERT INTO Escalations
-            (ConversationId, EscalatedFromUserId, EscalatedToUserId, Reason, Priority, Status, EscalatedAt)
+            (ConversationId, EscalatedFromUserId, EscalatedToUserId, Reason, Priority, Status,
+             EscalatedAt, LastEscalatedAt, EscalationLevel)
             VALUES
-            (@ConversationId, @EscalatedFromUserId, @EscalatedToUserId, @Reason, @Priority, @Status, @EscalatedAt);
+            (@ConversationId, @EscalatedFromUserId, @EscalatedToUserId, @Reason, @Priority, @Status,
+             @EscalatedAt, @LastEscalatedAt, @EscalationLevel);
             SELECT CAST(SCOPE_IDENTITY() as int);";
 
         return await conn.QuerySingleAsync<int>(sql, escalation);
@@ -117,6 +118,23 @@ public class EscalationRepository
         return rows > 0;
     }
 
+    /// <summary>
+    /// Resolves any active (Pending/InProgress) escalation on a conversation — called when the
+    /// conversation is closed so the timeout matrix stops bumping/notifying on a closed conversation.
+    /// Returns the number of escalations resolved.
+    /// </summary>
+    public async Task<int> ResolveActiveByConversationAsync(int conversationId, string? notes = null)
+    {
+        using var conn = _db.CreateConnection();
+        return await conn.ExecuteAsync(@"
+            UPDATE Escalations
+            SET Status = 'Resolved',
+                ResolvedAt = GETUTCDATE(),
+                ResolutionNotes = @Notes
+            WHERE ConversationId = @ConversationId AND Status IN ('Pending', 'InProgress')",
+            new { ConversationId = conversationId, Notes = notes });
+    }
+
     public async Task<bool> ResolveAsync(int id, string? resolutionNotes = null)
     {
         using var conn = _db.CreateConnection();
@@ -131,19 +149,6 @@ public class EscalationRepository
         return rows > 0;
     }
 
-    public async Task<int> GetPendingCountAsync()
-    {
-        using var conn = _db.CreateConnection();
-        var sql = "SELECT COUNT(*) FROM Escalations WHERE Status = 'Pending'";
-        return await conn.ExecuteScalarAsync<int>(sql);
-    }
-
-    public async Task<int> GetResolvedCountAsync()
-    {
-        using var conn = _db.CreateConnection();
-        var sql = "SELECT COUNT(*) FROM Escalations WHERE Status = 'Resolved'";
-        return await conn.ExecuteScalarAsync<int>(sql);
-    }
 }
 
 // Flat projection for escalation list view — avoids N+1 queries

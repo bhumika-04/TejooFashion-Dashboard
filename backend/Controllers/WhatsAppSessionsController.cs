@@ -195,6 +195,7 @@ public class WhatsAppSessionsController : ControllerBase
             AutoReplyEnabled = session.AutoReplyEnabled,
             MessagesToday = session.MessagesToday,
             LastActiveAt = session.LastActiveAt,
+            LastInboundAt = session.LastInboundAt,
             CreatedAt = session.CreatedAt,
             ApiKey = session.Provider == "Interakt" ? session.InteraktApiKey : session.MetaAccessToken,
         }).ToList();
@@ -387,11 +388,11 @@ public class WhatsAppSessionsController : ControllerBase
             if (conversation == null)
                 return BadRequest(new { error = "Failed to create conversation for this number" });
 
-            var success = await _orchestrator.SendManualMessageAsync(
+            var (success, sendError) = await _orchestrator.SendManualMessageAsync(
                 conversation.Id, request.Message ?? "Hello! This is a test message from Tejoo Fashion.");
 
             if (!success)
-                return BadRequest(new { error = "Message could not be sent — check provider credentials" });
+                return BadRequest(new { error = sendError ?? "Message could not be sent — check provider credentials" });
 
             _logger.LogInformation("✓ Test message sent to {Phone} via session {SessionId}", phone, id);
             return Ok(new { success = true, message = $"Message sent to {phone}" });

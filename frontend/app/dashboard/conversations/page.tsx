@@ -1,20 +1,66 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
+import { createPortal } from 'react-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { conversationsApi, messagesApi, sessionsApi, usersApi, quickRepliesApi, tagsApi, customersApi } from '@/services/api';
+import { conversationsApi, messagesApi, sessionsApi, usersApi, quickRepliesApi, tagsApi, customersApi, escalationsApi } from '@/services/api';
 import {
   Clock, CheckCircle2, AlertTriangle, AlertCircle, Phone,
   MessageSquare, Send, Search, X, UserCheck, BrainCircuit, RefreshCw,
-  ChevronDown, ChevronLeft, Smile, Meh, Frown, Zap, Tag, Download, ArrowDown, Wifi, WifiOff,
-  Paperclip, Image, Video, FileText, Music, XCircle,
+  ChevronDown, ChevronLeft, ChevronRight, Smile, Meh, Frown, Zap, Tag, Download, ArrowDown, Wifi, WifiOff,
+  Paperclip, Image, Video, FileText, Music, XCircle, Check, Bookmark, Plus,
 } from 'lucide-react';
-import { getRelativeTime, formatDate, parseUTCDate } from '@/lib/utils';
+import { getRelativeTime, formatDate, parseUTCDate, formatDayLabel, formatMessageTime } from '@/lib/utils';
 import { useToast } from '@/components/ui/toast';
+import { Pagination } from '@/components/ui/pagination';
 import { useSignalR, SignalRNotification } from '@/hooks/useSignalR';
 
 type FilterTab = 'all' | 'escalated' | 'done' | 'ai';
+
+// ── Media album grouping (WhatsApp-style) ────────────────────────────────────
+const MEDIA_BACKEND_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
+const ALBUM_GAP_MS = 60_000; // consecutive images within this gap are treated as one album
+
+function resolveMediaUrl(url?: string | null): string {
+  if (!url) return '';
+  return url.startsWith('/') ? `${MEDIA_BACKEND_BASE}${url}` : url;
+}
+
+type MessageGroup = { kind: 'album'; items: any[] } | { kind: 'single'; msg: any };
+
+/** Collapses runs of consecutive same-direction image messages (sent close together) into albums. */
+function buildMessageGroups(msgs: any[]): MessageGroup[] {
+  const groups: MessageGroup[] = [];
+  let album: any[] = [];
+
+  const flush = () => {
+    if (album.length === 1) groups.push({ kind: 'single', msg: album[0] });
+    else if (album.length > 1) groups.push({ kind: 'album', items: album });
+    album = [];
+  };
+
+  const ms = (v: any) => parseUTCDate(v)?.getTime() ?? 0;
+
+  for (const m of msgs) {
+    const isImage = m.messageType === 'image' && m.mediaUrl;
+    const prev = album[album.length - 1];
+    const continues =
+      !!prev &&
+      prev.direction === m.direction &&
+      Math.abs(ms(m.createdAt) - ms(prev.createdAt)) <= ALBUM_GAP_MS;
+
+    if (isImage && (!prev || continues)) {
+      album.push(m);
+    } else {
+      flush();
+      if (isImage) album.push(m);
+      else groups.push({ kind: 'single', msg: m });
+    }
+  }
+  flush();
+  return groups;
+}
 
 export default function ConversationsPage() {
   const [conversations, setConversations] = useState<any[]>([]);
@@ -24,8 +70,11 @@ export default function ConversationsPage() {
   const [sessionSearch, setSessionSearch] = useState('');
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageRef = useRef(1);
+  const activeFilterRef = useRef<FilterTab>('all');
+  const [counts, setCounts] = useState<{ total: number; open: number; escalated: number; closed: number; unread: number } | null>(null);
+  const [sessionCounts, setSessionCounts] = useState<Record<number, number>>({});
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
   const [activeSessionId, setActiveSessionId] = useState<number | undefined>(undefined);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list'); // mobile stack nav
@@ -50,6 +99,12 @@ export default function ConversationsPage() {
   const quickReplyRef = useRef<HTMLDivElement>(null);
   const [allConvTags, setAllConvTags] = useState<any[]>([]);    // conversation type tags
   const [allCustomerTags, setAllCustomerTags] = useState<any[]>([]); // customer type tags
+  // Bulk multi-select (Admin/HOD/Manager only)
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkMenu, setBulkMenu] = useState<'none' | 'assign' | 'tag'>('none');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const bulkMenuRef = useRef<HTMLDivElement>(null);
   const [allTags, setAllTags] = useState<any[]>([]);  // kept for backward compat
   const [convTags, setConvTags] = useState<any[]>([]);
   const [customerTags, setCustomerTags] = useState<any[]>([]);
@@ -70,6 +125,10 @@ export default function ConversationsPage() {
   const [forwardSearch, setForwardSearch] = useState('');
   const [forwardTargets, setForwardTargets] = useState<Set<number>>(new Set());
   const [forwarding, setForwarding] = useState(false);
+  // Image lightbox/gallery — browse all photos of an album
+  const [gallery, setGallery] = useState<{ images: string[]; index: number } | null>(null);
+  const activeThumbRef = useRef<HTMLButtonElement | null>(null);
+  const swipeStartX = useRef<number | null>(null);
   // Legacy aliases for backward compat with existing JSX
   const attachmentFile = attachmentFiles[0] ?? null;
   const attachmentPreview = attachmentPreviews[0] ?? null;
@@ -93,31 +152,59 @@ export default function ConversationsPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const selectedConvRef = useRef<any>(null);
+  const activeSessionIdRef = useRef<number | undefined>(undefined);
+  const reloadDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shouldScrollRef = useRef(true);
   const isAtBottomRef = useRef(true);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { showToast } = useToast();
 
   useEffect(() => { selectedConvRef.current = selectedConv; }, [selectedConv]);
+  useEffect(() => { activeFilterRef.current = activeFilter; }, [activeFilter]);
+  useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
   useEffect(() => {
     if (!shouldScrollRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     shouldScrollRef.current = false;
   }, [messages]);
 
+  // Keyboard navigation for the image gallery (Esc to close, ←/→ to move)
+  useEffect(() => {
+    if (!gallery) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setGallery(null);
+      else if (e.key === 'ArrowLeft') setGallery(g => (g && g.index > 0 ? { ...g, index: g.index - 1 } : g));
+      else if (e.key === 'ArrowRight') setGallery(g => (g && g.index < g.images.length - 1 ? { ...g, index: g.index + 1 } : g));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [gallery]);
+
+  // Keep the active thumbnail scrolled into view in the gallery filmstrip
+  useEffect(() => {
+    activeThumbRef.current?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, [gallery?.index]);
+
   const handleNotification = useCallback((notification: SignalRNotification) => {
     if (notification.type === 'new_message' && notification.conversationId) {
       setConversations(prev => {
         const idx = prev.findIndex(c => c.id === notification.conversationId);
         if (idx === -1) {
-          // New conversation not yet in the list — reload the full list to include it
-          loadConversations();
+          // New conversation not yet in the list — refresh quietly (and debounced,
+          // so a burst of messages doesn't repeatedly flash/reset the list).
+          if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
+          reloadDebounceRef.current = setTimeout(
+            () => loadConversations(activeSessionIdRef.current, true),
+            800
+          );
           return prev;
         }
         const updated = {
           ...prev[idx],
           lastMessagePreview: notification.message,
           lastMessageAt: notification.timestamp,
+          // Mark unread unless the agent is currently viewing this conversation
+          isUnread: selectedConvRef.current?.id !== notification.conversationId,
         };
         return [updated, ...prev.filter((_, i) => i !== idx)];
       });
@@ -142,8 +229,8 @@ export default function ConversationsPage() {
 
     if (notification.type === 'conversation_assigned' && notification.conversationId) {
       showToast(`A conversation was assigned to you`, 'info');
-      // Refresh so the assignment reflects in the list
-      loadConversations();
+      // Refresh quietly so the assignment reflects in the list without flicker
+      loadConversations(activeSessionIdRef.current, true);
     }
   }, []);
 
@@ -156,6 +243,7 @@ export default function ConversationsPage() {
     quickRepliesApi.getAll().then(r => setQuickReplies(r.data ?? [])).catch(() => {});
     tagsApi.getAll('conversation').then(r => { setAllConvTags(r.data ?? []); setAllTags(r.data ?? []); }).catch(() => {});
     tagsApi.getAll('customer').then(r => setAllCustomerTags(r.data ?? [])).catch(() => {});
+    return () => { if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current); };
   }, []);
 
   // Close tag menu on outside click
@@ -188,29 +276,33 @@ export default function ConversationsPage() {
     return () => document.removeEventListener('mousedown', handler);
   }, [showAttachMenu]);
 
-  const loadConversations = async (sessionId?: number) => {
-    setLoading(true);
-    try {
-      const response = await conversationsApi.getAll(undefined, currentUserId, sessionId, PAGE_SIZE, 0);
-      setConversations(response.data);
-      setHasMore(response.data.length === PAGE_SIZE);
-    } catch {
-      showToast('Failed to load conversations', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Server-side status for the active tab so pagination is correct per tab.
+  // 'all' shows every status (sectioned); 'ai' is a client-only concept (no server status).
+  const statusForFilter = (f: FilterTab): string | undefined =>
+    f === 'escalated' ? 'Escalated' : f === 'done' ? 'Closed' : undefined;
 
-  const loadMoreConversations = async () => {
-    setLoadingMore(true);
+  const loadConversations = async (sessionId?: number, silent = false, pg: number = pageRef.current) => {
+    // `silent` skips the loading skeleton so background refreshes (e.g. a new
+    // message arriving for an off-page conversation) don't flash/reset the list.
+    if (!silent) setLoading(true);
+    pageRef.current = pg;
+    setPage(pg);
     try {
-      const response = await conversationsApi.getAll(undefined, currentUserId, activeSessionId, PAGE_SIZE, conversations.length);
-      setConversations(prev => [...prev, ...response.data]);
-      setHasMore(response.data.length === PAGE_SIZE);
+      const status = statusForFilter(activeFilterRef.current);
+      const response = await conversationsApi.getAll(status, currentUserId, sessionId, PAGE_SIZE, (pg - 1) * PAGE_SIZE);
+      setConversations(response.data);
+      // Real totals (not capped at the 100-row page) for the count badges
+      conversationsApi.getCounts(currentUserId, sessionId)
+        .then(r => setCounts(r.data))
+        .catch(() => {});
+      // Accurate per-session conversation counts (the loaded page only shows a slice)
+      conversationsApi.getCountsBySession(currentUserId)
+        .then(r => setSessionCounts(Object.fromEntries((r.data ?? []).map((x: any) => [x.sessionId, x.count]))))
+        .catch(() => {});
     } catch {
-      showToast('Failed to load more conversations', 'error');
+      if (!silent) showToast('Failed to load conversations', 'error');
     } finally {
-      setLoadingMore(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -222,7 +314,13 @@ export default function ConversationsPage() {
     // Clear any active search when switching sessions
     setSearchQuery('');
     setSearchResults(null);
-    loadConversations(next);
+    loadConversations(next, false, 1);   // reset to first page for the new session
+  };
+
+  // Navigate to a specific page of conversations and scroll the list to top.
+  const goToPage = (p: number) => {
+    loadConversations(activeSessionId, false, p);
+    document.getElementById('conv-list-scroll')?.scrollTo({ top: 0 });
   };
 
   const loadSessions = async () => {
@@ -260,6 +358,13 @@ export default function ConversationsPage() {
     joinConversation(conv.id);
     setMobileView('chat'); // push to chat on mobile
 
+    // Mark read for this user. Optimistically clear the badge if it was unread; always record the
+    // view server-side (covers deep-links opened via getById, which don't carry an isUnread flag).
+    if (conv.isUnread) {
+      setConversations(prev => prev.map(c => c.id === conv.id ? { ...c, isUnread: false } : c));
+    }
+    conversationsApi.markViewed(conv.id).catch(() => {});
+
     setSelectedConv(conv);
     setReplyText('');
     clearAttachment();
@@ -288,6 +393,39 @@ export default function ConversationsPage() {
       .then(r => setSummary(r.data))
       .catch(() => {/* no summary yet */});
   };
+
+  // Deep-link: open a specific conversation when navigated to with ?id=N
+  // (from the Customers page "View" links and the notification bell).
+  const deepLinkHandledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const id = new URLSearchParams(window.location.search).get('id');
+    if (!id || deepLinkHandledRef.current === id) return;
+    const numId = Number(id);
+    if (!numId) return;
+    deepLinkHandledRef.current = id;
+
+    (async () => {
+      const existing = conversations.find((c: any) => c.id === numId);
+      if (existing) { handleSelectConversation(existing); return; }
+      try {
+        const res = await conversationsApi.getById(numId);
+        const d: any = res.data;
+        if (d?.id) {
+          // Detail DTO nests the assignee; the header reads flat fields — normalize.
+          handleSelectConversation({
+            ...d,
+            assignedUserName: d.assignedUserName ?? d.assignedUser?.fullName ?? '',
+            assignedUserId: d.assignedUserId ?? d.assignedUser?.id ?? 0,
+          });
+        } else {
+          showToast('Conversation not found', 'error');
+        }
+      } catch {
+        showToast('Could not open that conversation', 'error');
+      }
+    })();
+  }, [conversations]);
 
   const handleToggleTag = async (tag: any) => {
     if (!selectedConv) return;
@@ -382,9 +520,9 @@ export default function ConversationsPage() {
       const mb = (limit / 1024 / 1024).toFixed(0);
       showToast(`${oversized.length} file(s) exceed the ${mb}MB limit for ${type}s and were removed`, 'error');
     }
-    const valid = allFiles.filter(f => f.size <= limit).slice(0, 10);
+    const valid = allFiles.filter(f => f.size <= limit).slice(0, 30);
     if (!valid.length) return;
-    if (allFiles.length > 10) showToast(`Only first 10 files selected`, 'info');
+    if (allFiles.length > 30) showToast(`Only first 30 files selected (WhatsApp limit)`, 'info');
 
     setShowAttachMenu(false);
     setAttachmentFiles(valid);
@@ -417,11 +555,12 @@ export default function ConversationsPage() {
     try {
       if (hasFiles) {
         setUploading(true);
-        // Warn if too many files — Interakt rate limits ~5 req/sec
-        const MAX_BATCH = 10;
+        // WhatsApp lets you attach up to 30 media at once. Each is sent as a separate API
+        // message with a small delay to stay under Interakt's rate limit (~5 req/sec).
+        const MAX_BATCH = 30;
         const files = attachmentFiles.slice(0, MAX_BATCH);
         if (attachmentFiles.length > MAX_BATCH)
-          showToast(`Sending first ${MAX_BATCH} of ${attachmentFiles.length} files (batch limit)`, 'info');
+          showToast(`Sending first ${MAX_BATCH} of ${attachmentFiles.length} files (WhatsApp limit)`, 'info');
 
         for (let i = 0; i < files.length; i++) {
           setUploadProgress(Math.round(((i) / files.length) * 100));
@@ -442,8 +581,8 @@ export default function ConversationsPage() {
       setReplyText('');
       shouldScrollRef.current = true;
       await loadMessages(selectedConv.id);
-    } catch {
-      showToast('Failed to send message', 'error');
+    } catch (err: any) {
+      showToast(err?.response?.data?.error ?? 'Failed to send message', 'error');
       setUploading(false);
     } finally {
       setSending(false);
@@ -460,12 +599,15 @@ export default function ConversationsPage() {
   const handleEscalate = async () => {
     if (!selectedConv) return;
     try {
-      await conversationsApi.updateStatus(selectedConv.id, 'Escalated');
-      showToast('Conversation escalated', 'success');
+      // Creates a real escalation record (server picks the next-level user) and engages the
+      // CRR→Manager→HOD timeout matrix — not just a status label change.
+      const res = await escalationsApi.escalateConversation(selectedConv.id);
+      const to = res.data?.escalatedTo;
+      showToast(to ? `Escalated to ${to}` : 'Conversation escalated', 'success');
       loadConversations();
       setSelectedConv({ ...selectedConv, status: 'Escalated' });
-    } catch {
-      showToast('Failed to escalate', 'error');
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Failed to escalate', 'error');
     }
   };
 
@@ -581,11 +723,97 @@ export default function ConversationsPage() {
   const closedConvs = searchResults ? [] : filteredConversations.filter(c => c.status === 'Closed');
   const isClosed = selectedConv?.status === 'Closed';
 
+  // ── Bulk multi-select helpers ──
+  const toggleSelectId = (conv: any) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(conv.id)) next.delete(conv.id); else next.add(conv.id);
+      return next;
+    });
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+    setBulkMenu('none');
+  };
+
+  const selectAllVisible = () => {
+    // Match whatever the list is actually showing (search results vs the filtered list).
+    const visible = searchResults !== null ? searchResults : filteredConversations;
+    const ids = visible.map(c => c.id);
+    setSelectedIds(prev => (prev.size === ids.length && ids.length > 0 ? new Set() : new Set(ids)));
+  };
+
+  const runBulk = async (action: 'close' | 'assign' | 'tag', opts: { userId?: number; tagId?: number } = {}) => {
+    if (selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const res = await conversationsApi.bulkAction([...selectedIds], action, opts);
+      showToast(`${action === 'close' ? 'Closed' : action === 'assign' ? 'Assigned' : 'Tagged'} ${res.data.affected} conversation${res.data.affected === 1 ? '' : 's'}`, 'success');
+      exitSelectMode();
+      loadConversations(activeSessionId, true);
+      if (selectedConv) loadMessages(selectedConv.id);
+    } catch {
+      showToast('Bulk action failed', 'error');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  // Close the bulk assign/tag popover on outside click
+  useEffect(() => {
+    if (bulkMenu === 'none') return;
+    const handler = (e: MouseEvent) => {
+      if (bulkMenuRef.current && !bulkMenuRef.current.contains(e.target as Node)) setBulkMenu('none');
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [bulkMenu]);
+
+  // ── Saved views (session + status tab), persisted per browser ──
+  type SavedView = { name: string; sessionId?: number; filter: FilterTab };
+  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  const [showSavedMenu, setShowSavedMenu] = useState(false);
+  const savedMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try { setSavedViews(JSON.parse(localStorage.getItem('conv.savedViews') || '[]')); } catch { /* ignore */ }
+    const handler = (e: MouseEvent) => {
+      if (savedMenuRef.current && !savedMenuRef.current.contains(e.target as Node)) setShowSavedMenu(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const persistViews = (views: SavedView[]) => {
+    setSavedViews(views);
+    localStorage.setItem('conv.savedViews', JSON.stringify(views));
+  };
+  const saveCurrentView = () => {
+    const sessName = activeSessionId ? (sessions.find((s: any) => s.id === activeSessionId)?.phoneNumber ?? 'session') : 'All sessions';
+    const tabName = activeFilter === 'all' ? 'All' : activeFilter[0].toUpperCase() + activeFilter.slice(1);
+    const name = window.prompt('Name this view:', `${sessName} · ${tabName}`)?.trim();
+    if (!name) return;
+    persistViews([...savedViews.filter(v => v.name !== name), { name, sessionId: activeSessionId, filter: activeFilter }]);
+    setShowSavedMenu(false);
+  };
+  const applyView = (v: SavedView) => {
+    setShowSavedMenu(false);
+    setActiveFilter(v.filter);
+    activeFilterRef.current = v.filter;
+    setActiveSessionId(v.sessionId);
+    setSearchQuery(''); setSearchResults(null);
+    setSelectedConv(null); setMessages([]);
+    loadConversations(v.sessionId, false, 1);
+  };
+  const deleteView = (name: string) => persistViews(savedViews.filter(v => v.name !== name));
+
   return (
     <div className="flex flex-col h-screen bg-white overflow-hidden">
       {/* Top Navigation Bar — hidden on mobile when in chat view */}
       <div className={`bg-white border-b border-gray-100 px-3 sm:px-6 py-2 sm:py-3 flex items-center justify-between shadow-sm ${mobileView === 'chat' ? 'hidden sm:flex' : 'flex'}`}>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1">
           {([
             { key: 'all',       label: 'All',       icon: null },
             { key: 'escalated', label: 'Escalated', icon: AlertTriangle },
@@ -593,8 +821,8 @@ export default function ConversationsPage() {
             { key: 'ai',        label: 'AI Turn',    icon: null },
           ] as { key: FilterTab; label: string; icon: any }[]).map(({ key, label, icon: Icon }) => (
             <button key={key}
-              onClick={() => { setActiveFilter(key); clearSearch(); }}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-medium rounded-lg
+              onClick={() => { setActiveFilter(key); activeFilterRef.current = key; clearSearch(); loadConversations(activeSessionId, false, 1); }}
+              className={`flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 text-sm font-medium rounded-lg flex-shrink-0 whitespace-nowrap
                 transition-all duration-150 active:scale-95 ${
                 activeFilter === key
                   ? key === 'escalated' ? 'bg-orange-600 text-white shadow-sm'
@@ -604,10 +832,51 @@ export default function ConversationsPage() {
               }`}>
               {Icon && <Icon className="h-3.5 w-3.5" />}
               {label}
+              {(() => {
+                const n = key === 'all' ? counts?.unread
+                        : key === 'escalated' ? counts?.escalated
+                        : key === 'done' ? counts?.closed
+                        : undefined;
+                if (!n) return null;
+                return (
+                  <span className={`ml-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
+                    activeFilter === key ? 'bg-white/25 text-white'
+                    : key === 'all' ? 'bg-red-500 text-white'   // unread = attention
+                    : 'bg-gray-200 text-gray-600'
+                  }`}>{n}</span>
+                );
+              })()}
             </button>
           ))}
+          {/* Saved views dropdown */}
+          <div className="relative flex-shrink-0 ml-1" ref={savedMenuRef}>
+            <button onClick={() => setShowSavedMenu(v => !v)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 rounded-lg">
+              <Bookmark className="h-3.5 w-3.5" /> Views
+              <ChevronDown className={`h-3 w-3 transition-transform ${showSavedMenu ? 'rotate-180' : ''}`} />
+            </button>
+            {showSavedMenu && (
+              <div className="absolute left-0 mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-1">
+                <button onClick={saveCurrentView}
+                  className="w-full text-left px-3 py-2 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 flex items-center gap-1.5">
+                  <Plus className="h-3.5 w-3.5" /> Save current view
+                </button>
+                {savedViews.length > 0 && <div className="border-t border-gray-100 my-1" />}
+                {savedViews.map(v => (
+                  <div key={v.name} className="flex items-center justify-between px-3 py-1.5 hover:bg-gray-50 group">
+                    <button onClick={() => applyView(v)} className="flex-1 text-left text-xs text-gray-700 truncate">{v.name}</button>
+                    <button onClick={() => deleteView(v.name)} title="Delete view"
+                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 ml-1 flex-shrink-0">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+                {savedViews.length === 0 && <p className="px-3 py-2 text-[11px] text-gray-400">No saved views yet</p>}
+              </div>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-4 text-sm text-gray-400">
+        <div className="hidden md:flex items-center gap-4 text-sm text-gray-400 flex-shrink-0 pl-3">
           <span className="flex items-center gap-1.5" title={isConnected ? 'Real-time connected' : 'Connecting…'}>
             {isConnected
               ? <Wifi className="h-3.5 w-3.5 text-green-500" />
@@ -621,11 +890,11 @@ export default function ConversationsPage() {
           )}
           <span className="flex items-center gap-1.5">
             <MessageSquare className="h-3.5 w-3.5" />
-            <span className="font-medium text-gray-700">{conversations.length}</span> Total
+            <span className="font-medium text-gray-700">{counts?.total ?? conversations.length}</span> Total
           </span>
           <span className="flex items-center gap-1.5">
             <AlertCircle className="h-3.5 w-3.5 text-orange-500" />
-            <span className="font-medium text-orange-600">{conversations.filter(c => c.status === 'Escalated').length}</span> Escalated
+            <span className="font-medium text-orange-600">{counts?.escalated ?? conversations.filter(c => c.status === 'Escalated').length}</span> Escalated
           </span>
         </div>
       </div>
@@ -656,7 +925,7 @@ export default function ConversationsPage() {
                 All Sessions
               </span>
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${activeSessionId === undefined ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'}`}>
-                {conversations.length}
+                {counts?.total ?? conversations.length}
               </span>
             </div>
             {sessions.filter(s =>
@@ -690,7 +959,8 @@ export default function ConversationsPage() {
                         {session.assignedUserName || 'Unassigned'}
                       </p>
                       {(() => {
-                        const count = conversations.filter(c => c.sessionId === session.id).length;
+                        // Accurate total from the server; fall back to the loaded-page count if not yet fetched
+                        const count = sessionCounts[session.id] ?? conversations.filter(c => c.sessionId === session.id).length;
                         return count > 0 ? (
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
                             activeSessionId === session.id ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'
@@ -734,6 +1004,88 @@ export default function ConversationsPage() {
             </div>
           )}
 
+          {/* Bulk select toolbar (Admin/HOD/Manager) */}
+          {!isCRR && (
+            !selectMode ? (
+              <div className="flex items-center justify-end px-3 py-1.5 border-b border-gray-100 bg-white">
+                <button
+                  onClick={() => setSelectMode(true)}
+                  className="flex items-center gap-1.5 text-[11px] font-medium text-gray-500 hover:text-indigo-600 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors"
+                >
+                  <Check className="h-3.5 w-3.5" /> Select
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 px-3 py-2 border-b border-indigo-100 bg-indigo-50/60 flex-wrap">
+                <button onClick={selectAllVisible} className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 px-1.5">
+                  {(() => {
+                    const vis = searchResults !== null ? searchResults : filteredConversations;
+                    return selectedIds.size === vis.length && vis.length > 0 ? 'Clear' : 'All';
+                  })()}
+                </button>
+                <span className="text-[11px] font-medium text-gray-600">{selectedIds.size} selected</span>
+                <div className="flex-1" />
+                {/* Close */}
+                <button
+                  onClick={() => runBulk('close')}
+                  disabled={selectedIds.size === 0 || bulkBusy}
+                  className="flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-green-700 px-2 py-1 rounded-lg hover:bg-green-50 disabled:opacity-40"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Close
+                </button>
+                {/* Assign */}
+                <div className="relative" ref={bulkMenu === 'assign' ? bulkMenuRef : undefined}>
+                  <button
+                    onClick={() => setBulkMenu(m => m === 'assign' ? 'none' : 'assign')}
+                    disabled={selectedIds.size === 0 || bulkBusy}
+                    className="flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-indigo-700 px-2 py-1 rounded-lg hover:bg-indigo-50 disabled:opacity-40"
+                  >
+                    <UserCheck className="h-3.5 w-3.5" /> Assign
+                  </button>
+                  {bulkMenu === 'assign' && (
+                    <div className="absolute right-0 mt-1 w-52 max-h-56 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1">
+                      {users.map((u: any) => (
+                        <button key={u.id} onClick={() => runBulk('assign', { userId: u.id })}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 flex items-center gap-2">
+                          <span className="h-5 w-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[9px] font-bold flex-shrink-0">
+                            {(u.fullName ?? '?').charAt(0)}
+                          </span>
+                          <span className="truncate">{u.fullName} <span className="text-gray-400">({u.role})</span></span>
+                        </button>
+                      ))}
+                      {users.length === 0 && <p className="px-3 py-2 text-xs text-gray-400">No users</p>}
+                    </div>
+                  )}
+                </div>
+                {/* Tag */}
+                <div className="relative" ref={bulkMenu === 'tag' ? bulkMenuRef : undefined}>
+                  <button
+                    onClick={() => setBulkMenu(m => m === 'tag' ? 'none' : 'tag')}
+                    disabled={selectedIds.size === 0 || bulkBusy}
+                    className="flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-purple-700 px-2 py-1 rounded-lg hover:bg-purple-50 disabled:opacity-40"
+                  >
+                    <Tag className="h-3.5 w-3.5" /> Tag
+                  </button>
+                  {bulkMenu === 'tag' && (
+                    <div className="absolute right-0 mt-1 w-48 max-h-56 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1">
+                      {allConvTags.map((t: any) => (
+                        <button key={t.id} onClick={() => runBulk('tag', { tagId: t.id })}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: t.color || '#6366f1' }} />
+                          <span className="truncate">{t.name}</span>
+                        </button>
+                      ))}
+                      {allConvTags.length === 0 && <p className="px-3 py-2 text-xs text-gray-400">No tags</p>}
+                    </div>
+                  )}
+                </div>
+                <button onClick={exitSelectMode} className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )
+          )}
+
           {loading ? (
             <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
               {Array.from({ length: 8 }).map((_, i) => (
@@ -748,7 +1100,8 @@ export default function ConversationsPage() {
               ))}
             </div>
           ) : (
-            <div className="flex-1 overflow-y-auto min-h-0">
+            <>
+            <div id="conv-list-scroll" className="flex-1 overflow-y-auto min-h-0">
               {/* Search results mode */}
               {searchResults !== null ? (
                 <div>
@@ -768,6 +1121,9 @@ export default function ConversationsPage() {
                         onSelect={handleSelectConversation}
                         getInitials={getInitials}
                         getAvatarColor={getAvatarColor}
+                        selectMode={selectMode}
+                        selected={selectedIds.has(conv.id)}
+                        onToggleSelect={toggleSelectId}
                       />
                     ))
                   )}
@@ -779,29 +1135,31 @@ export default function ConversationsPage() {
                       <div className="px-4 py-2 bg-orange-50 border-b border-orange-100 sticky top-0 z-20">
                         <h3 className="text-xs font-semibold text-orange-700 uppercase tracking-wide flex items-center gap-1.5">
                           <AlertTriangle className="h-3 w-3" />
-                          Escalated ({highPriorityConvs.length})
+                          Escalated ({searchResults ? highPriorityConvs.length : (counts?.escalated ?? highPriorityConvs.length)})
                         </h3>
                       </div>
                       {highPriorityConvs.map(conv => (
                         <ConversationItem key={conv.id} conv={conv} selectedConv={selectedConv}
                           onSelect={handleSelectConversation} getInitials={getInitials}
-                          getAvatarColor={getAvatarColor} isHighPriority showSession={!activeSessionId} />
+                          getAvatarColor={getAvatarColor} isHighPriority showSession={!activeSessionId}
+                          selectMode={selectMode} selected={selectedIds.has(conv.id)} onToggleSelect={toggleSelectId} />
                       ))}
                     </div>
                   )}
                   {activeConvs.length > 0 && (
                     <div>
                       <div className="px-4 py-2 bg-indigo-50 border-b border-indigo-100 sticky top-0 z-20">
-                        <h3 className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Active ({activeConvs.length})</h3>
+                        <h3 className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Active ({searchResults ? activeConvs.length : (counts?.open ?? activeConvs.length)})</h3>
                       </div>
                       {activeConvs.map(conv => (
                         <ConversationItem key={conv.id} conv={conv} selectedConv={selectedConv}
                           onSelect={handleSelectConversation} getInitials={getInitials}
-                          getAvatarColor={getAvatarColor} showSession={!activeSessionId} />
+                          getAvatarColor={getAvatarColor} showSession={!activeSessionId}
+                          selectMode={selectMode} selected={selectedIds.has(conv.id)} onToggleSelect={toggleSelectId} />
                       ))}
                     </div>
                   )}
-                  {closedConvs.length > 0 && activeFilter === 'all' && (
+                  {closedConvs.length > 0 && (activeFilter === 'all' || activeFilter === 'done') && (
                     <div>
                       <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 sticky top-0 z-20">
                         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Closed ({closedConvs.length})</h3>
@@ -809,7 +1167,8 @@ export default function ConversationsPage() {
                       {closedConvs.map(conv => (
                         <ConversationItem key={conv.id} conv={conv} selectedConv={selectedConv}
                           onSelect={handleSelectConversation} getInitials={getInitials}
-                          getAvatarColor={getAvatarColor} showSession={!activeSessionId} />
+                          getAvatarColor={getAvatarColor} showSession={!activeSessionId}
+                          selectMode={selectMode} selected={selectedIds.has(conv.id)} onToggleSelect={toggleSelectId} />
                       ))}
                     </div>
                   )}
@@ -822,20 +1181,21 @@ export default function ConversationsPage() {
                       }
                     </div>
                   )}
-                  {hasMore && !searchResults && (
-                    <div className="p-3 border-t border-gray-100">
-                      <button
-                        onClick={loadMoreConversations}
-                        disabled={loadingMore}
-                        className="w-full text-xs text-indigo-600 hover:text-indigo-800 py-2 rounded-lg hover:bg-indigo-50 transition disabled:opacity-50"
-                      >
-                        {loadingMore ? 'Loading…' : `Load more (showing ${conversations.length})`}
-                      </button>
-                    </div>
-                  )}
                 </>
               )}
             </div>
+            {/* Pagination (hidden in search mode) */}
+            {searchResults === null && (
+              <Pagination
+                page={page}
+                totalPages={Math.max(1, Math.ceil(
+                  ((activeFilter === 'escalated' ? counts?.escalated
+                    : activeFilter === 'done' ? counts?.closed
+                    : counts?.total) ?? 0) / PAGE_SIZE))}
+                onChange={goToPage}
+              />
+            )}
+            </>
           )}
         </div>
 
@@ -1024,13 +1384,13 @@ export default function ConversationsPage() {
                       <BrainCircuit className="h-4 w-4" />
                     </Button>
                     <Button size="sm" variant="outline" onClick={handleMarkResolved}
-                      disabled={isClosed} className="text-green-600 border-green-200 hover:bg-green-50">
-                      <CheckCircle2 className="h-4 w-4 mr-1" />Resolve
+                      disabled={isClosed} title="Resolve" className="text-green-600 border-green-200 hover:bg-green-50">
+                      <CheckCircle2 className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Resolve</span>
                     </Button>
                     <Button size="sm" variant="outline" onClick={handleEscalate}
                       disabled={selectedConv.status === 'Escalated' || isClosed}
-                      className="text-orange-600 border-orange-200 hover:bg-orange-50">
-                      <AlertTriangle className="h-4 w-4 mr-1" />Escalate
+                      title="Escalate" className="text-orange-600 border-orange-200 hover:bg-orange-50">
+                      <AlertTriangle className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Escalate</span>
                     </Button>
                   </div>
                 </div>
@@ -1041,7 +1401,7 @@ export default function ConversationsPage() {
                 <div className="flex flex-col flex-1 min-w-0">
                   <div
                     ref={messagesContainerRef}
-                    className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50 relative"
+                    className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4 bg-gray-50 relative"
                     onScroll={(e) => {
                       const el = e.currentTarget;
                       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -1065,24 +1425,103 @@ export default function ConversationsPage() {
                     {messages.length === 0 ? (
                       <div className="text-center py-12 text-gray-500">No messages in this conversation</div>
                     ) : (
-                      messages.map((msg) => {
+                      buildMessageGroups(messages).map((group, gi, arr) => {
+                        // WhatsApp-style centered date chip when the day changes
+                        const gm: any = group.kind === 'album' ? group.items[0] : group.msg;
+                        const prev: any = arr[gi - 1];
+                        const prevGm: any = prev ? (prev.kind === 'album' ? prev.items[0] : prev.msg) : null;
+                        const dayLabel = formatDayLabel(gm.createdAt);
+                        const showSep = !prevGm || formatDayLabel(prevGm.createdAt) !== dayLabel;
+                        const separator = showSep ? (
+                          <div className="flex justify-center my-3">
+                            <span className="text-[11px] font-medium text-gray-500 bg-gray-100/90 px-3 py-1 rounded-full shadow-sm">{dayLabel}</span>
+                          </div>
+                        ) : null;
+                        if (group.kind === 'album') {
+                          const items = group.items;
+                          const albumInbound = items[0].direction === 'inbound';
+                          const caption = items.map((x: any) => x.content).filter(Boolean).pop();
+                          const shown = items.slice(0, 4);
+                          const extra = items.length - shown.length;
+                          const lastMsg = items[items.length - 1];
+                          return (
+                            <Fragment key={`album-${items[0].id}`}>
+                            {separator}
+                            <div className={`group flex items-end gap-1.5 ${albumInbound ? 'justify-start' : 'justify-end'}`}>
+                              {albumInbound && (
+                                <div className={`w-8 h-8 rounded-full ${getAvatarColor(selectedConv.id)} flex items-center justify-center text-xs font-medium flex-shrink-0`}>
+                                  {getInitials(selectedConv.customerName, selectedConv.customerPhone)}
+                                </div>
+                              )}
+                              <div className="max-w-[85%] sm:max-w-[70%] min-w-0 flex flex-col gap-1">
+                                <div className={`flex items-center gap-2 ${albumInbound ? '' : 'justify-end'}`}>
+                                  <span className="text-xs text-gray-400">{formatMessageTime(lastMsg.createdAt)}</span>
+                                  <Badge variant="outline" className="text-xs bg-gray-50 text-gray-500 border-gray-200">{items.length} photos</Badge>
+                                </div>
+                                <div className={`rounded-2xl overflow-hidden max-w-full min-w-0 ${albumInbound ? 'bg-white border border-gray-200 rounded-tl-none text-gray-800' : 'bg-blue-600 text-white rounded-br-none'}`}>
+                                  <div className="grid grid-cols-2 gap-0.5 w-[min(72vw,264px)]">
+                                    {shown.map((m: any, idx: number) => {
+                                      const src = resolveMediaUrl(m.mediaUrl);
+                                      const showOverlay = idx === shown.length - 1 && extra > 0;
+                                      // 3-image album: first photo spans the full width so no empty cell is left.
+                                      const span = shown.length === 3 && idx === 0 ? 'col-span-2' : '';
+                                      return (
+                                        <button key={m.id} type="button"
+                                          onClick={() => setGallery({ images: items.map((x: any) => resolveMediaUrl(x.mediaUrl)), index: idx })}
+                                          className={`relative block bg-gray-100 cursor-pointer ${span}`}>
+                                          {/* placeholder shown only if the image fails to load */}
+                                          <span className="absolute inset-0 flex items-center justify-center text-gray-300">
+                                            <Image className="h-6 w-6" />
+                                          </span>
+                                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                                          <img src={src} alt="image" className="relative w-full h-[130px] object-cover"
+                                            onError={e => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
+                                          {showOverlay && (
+                                            <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-2xl font-bold">+{extra}</div>
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  {caption && <p className="text-sm leading-relaxed px-4 py-2.5 max-w-[min(72vw,264px)] whitespace-pre-wrap break-words">{caption}</p>}
+                                </div>
+                              </div>
+                              {!albumInbound && (
+                                <div className="w-8 h-8 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-xs font-medium flex-shrink-0">ME</div>
+                              )}
+                              <button
+                                onClick={() => { setForwardMsg(lastMsg); setForwardTargets(new Set()); setForwardSearch(''); }}
+                                className={`self-center opacity-0 group-hover:opacity-100 flex-shrink-0 h-7 w-7 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-gray-400 hover:text-indigo-600 hover:border-indigo-200 transition-all ${albumInbound ? '' : 'order-first'}`}
+                                title="Forward"
+                              >
+                                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 9l3 3m0 0l-3 3m3-3H8m13 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                              </button>
+                            </div>
+                            </Fragment>
+                          );
+                        }
+                        const msg = group.msg;
                         const isInbound = msg.direction === 'inbound';
                         return (
-                          <div key={msg.id} className={`group flex items-end gap-1.5 ${isInbound ? 'justify-start' : 'justify-end'}`}>
+                          <Fragment key={msg.id}>
+                          {separator}
+                          <div className={`group flex items-end gap-1.5 ${isInbound ? 'justify-start' : 'justify-end'}`}>
                             {isInbound && (
                               <div className={`w-8 h-8 rounded-full ${getAvatarColor(selectedConv.id)} flex items-center justify-center text-xs font-medium flex-shrink-0`}>
                                 {getInitials(selectedConv.customerName, selectedConv.customerPhone)}
                               </div>
                             )}
-                            <div className={`max-w-[70%] ${isInbound ? '' : 'items-end'} flex flex-col gap-1`}>
+                            <div className={`max-w-[85%] sm:max-w-[70%] min-w-0 ${isInbound ? '' : 'items-end'} flex flex-col gap-1`}>
 
                               <div className={`flex items-center gap-2 ${isInbound ? '' : 'justify-end'}`}>
-                                <span className="text-xs text-gray-400">{getRelativeTime(msg.createdAt)}</span>
+                                <span className="text-xs text-gray-400">{formatMessageTime(msg.createdAt)}</span>
                                 {msg.isAiGenerated && (
                                   <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-200">AI</Badge>
                                 )}
                               </div>
-                              <div className={`rounded-2xl overflow-hidden ${isInbound ? 'bg-white border border-gray-200 rounded-tl-none text-gray-800' : 'bg-blue-600 text-white rounded-br-none'}`}>
+                              <div className={`rounded-2xl overflow-hidden max-w-full min-w-0 ${isInbound ? 'bg-white border border-gray-200 rounded-tl-none text-gray-800' : 'bg-blue-600 text-white rounded-br-none'}`}>
                                 {msg.mediaUrl && (() => {
                                   // Local files are on the backend server — prepend backend base URL
                                   const BACKEND = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
@@ -1109,9 +1548,9 @@ export default function ConversationsPage() {
                                       )}
                                       {msg.messageType === 'document' && (
                                         <a href={src} target="_blank" rel="noreferrer"
-                                          className={`flex items-center gap-2 px-4 py-3 hover:opacity-80 ${isInbound ? 'text-indigo-700' : 'text-white'}`}>
+                                          className={`flex items-center gap-2 px-4 py-3 max-w-[260px] hover:opacity-80 ${isInbound ? 'text-indigo-700' : 'text-white'}`}>
                                           <FileText className="h-5 w-5 flex-shrink-0" />
-                                          <span className="text-sm font-medium truncate">{src.split('/').pop()}</span>
+                                          <span className="text-sm font-medium truncate min-w-0">{src.split('/').pop()?.split('?')[0]}</span>
                                           <Download className="h-4 w-4 flex-shrink-0 ml-auto" />
                                         </a>
                                       )}
@@ -1119,7 +1558,7 @@ export default function ConversationsPage() {
                                   );
                                 })()}
                                 {msg.content && (
-                                  <p className="text-sm leading-relaxed px-4 py-2.5">{msg.content}</p>
+                                  <p className={`text-sm leading-relaxed px-4 py-2.5 whitespace-pre-wrap break-words ${msg.mediaUrl ? 'max-w-[260px]' : ''}`}>{msg.content}</p>
                                 )}
                               </div>
                             </div>
@@ -1139,6 +1578,7 @@ export default function ConversationsPage() {
                               </svg>
                             </button>
                           </div>
+                          </Fragment>
                         );
                       })
                     )}
@@ -1436,9 +1876,87 @@ export default function ConversationsPage() {
         </div>
       </div>
 
-      {/* ── Forward Message Modal ── */}
-      {forwardMsg && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setForwardMsg(null)}>
+      {/* ── Image Gallery / Lightbox ── (portaled to body so it sits above the app header/chrome) */}
+      {gallery && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[200] bg-black/90 flex items-center justify-center select-none"
+          onClick={() => setGallery(null)}>
+          {/* counter */}
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white/90 text-sm font-medium">
+            {gallery.index + 1} / {gallery.images.length}
+          </div>
+          {/* close */}
+          <button onClick={() => setGallery(null)} aria-label="Close"
+            className="absolute top-4 right-4 h-11 w-11 rounded-full bg-white/15 hover:bg-white/30 text-white flex items-center justify-center ring-1 ring-white/30 shadow-lg transition-colors">
+            <X className="h-6 w-6" />
+          </button>
+          {/* download current */}
+          <a href={gallery.images[gallery.index]} target="_blank" rel="noreferrer" download
+            onClick={e => e.stopPropagation()}
+            className="absolute top-3 right-16 h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
+            <Download className="h-5 w-5" />
+          </a>
+          {/* prev */}
+          {gallery.index > 0 && (
+            <button onClick={e => { e.stopPropagation(); setGallery(g => g && { ...g, index: g.index - 1 }); }}
+              className="absolute left-3 sm:left-6 h-12 w-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
+              <ChevronLeft className="h-7 w-7" />
+            </button>
+          )}
+          {/* current image — supports swipe left/right on touch devices */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={gallery.images[gallery.index]} alt={`photo ${gallery.index + 1}`}
+            onClick={e => e.stopPropagation()}
+            onTouchStart={e => { swipeStartX.current = e.touches[0].clientX; }}
+            onTouchEnd={e => {
+              const start = swipeStartX.current;
+              swipeStartX.current = null;
+              if (start == null) return;
+              const dx = e.changedTouches[0].clientX - start;
+              if (Math.abs(dx) < 40) return;
+              setGallery(g => {
+                if (!g) return g;
+                if (dx < 0 && g.index < g.images.length - 1) return { ...g, index: g.index + 1 };
+                if (dx > 0 && g.index > 0) return { ...g, index: g.index - 1 };
+                return g;
+              });
+            }}
+            className="max-h-[72vh] max-w-[92vw] object-contain rounded-lg shadow-2xl" />
+          {/* next */}
+          {gallery.index < gallery.images.length - 1 && (
+            <button onClick={e => { e.stopPropagation(); setGallery(g => g && { ...g, index: g.index + 1 }); }}
+              className="absolute right-3 sm:right-6 h-12 w-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
+              <ChevronRight className="h-7 w-7" />
+            </button>
+          )}
+          {/* thumbnail filmstrip */}
+          {gallery.images.length > 1 && (
+            <div className="absolute bottom-0 left-0 right-0 bg-black/50 px-3 py-3 flex gap-2 overflow-x-auto"
+              onClick={e => e.stopPropagation()}>
+              <div className="flex gap-2 mx-auto">
+                {gallery.images.map((img, i) => (
+                  <button key={i} type="button"
+                    ref={i === gallery.index ? activeThumbRef : null}
+                    onClick={() => setGallery(g => g && { ...g, index: i })}
+                    className={`relative flex-shrink-0 h-14 w-14 rounded-md overflow-hidden border-2 transition-all ${
+                      i === gallery.index
+                        ? 'border-green-400 ring-2 ring-green-400/40'
+                        : 'border-transparent opacity-50 hover:opacity-100'
+                    }`}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={img} alt={`thumbnail ${i + 1}`} className="w-full h-full object-cover"
+                      onError={e => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>,
+        document.body
+      )}
+
+      {/* ── Forward Message Modal ── (portaled so it sits above the app header/chrome) */}
+      {forwardMsg && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-black/50 z-[190] flex items-center justify-center p-4" onClick={() => setForwardMsg(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <div>
@@ -1489,7 +2007,8 @@ export default function ConversationsPage() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -1593,7 +2112,9 @@ function SlaTimer({ lastMessageAt, status }: { lastMessageAt: string | null; sta
   if (mins < SLA_WARN_MINUTES) return null;
 
   const breached = mins >= SLA_BREACH_MINUTES;
-  const label = mins >= 60
+  const label = mins >= 1440           // ≥ 24h → days + hours
+    ? `${Math.floor(mins / 1440)}d ${Math.floor((mins % 1440) / 60)}h`
+    : mins >= 60                        // ≥ 1h → hours + minutes
     ? `${Math.floor(mins / 60)}h ${mins % 60}m`
     : `${mins}m`;
 
@@ -1608,7 +2129,8 @@ function SlaTimer({ lastMessageAt, status }: { lastMessageAt: string | null; sta
 }
 
 function ConversationItem({
-  conv, selectedConv, onSelect, getInitials, getAvatarColor, isHighPriority = false, showSession = false
+  conv, selectedConv, onSelect, getInitials, getAvatarColor, isHighPriority = false, showSession = false,
+  selectMode = false, selected = false, onToggleSelect
 }: {
   conv: any;
   selectedConv: any;
@@ -1617,15 +2139,25 @@ function ConversationItem({
   getAvatarColor: (id: number) => string;
   isHighPriority?: boolean;
   showSession?: boolean;
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (conv: any) => void;
 }) {
   return (
     <div
-      onClick={() => onSelect(conv)}
+      onClick={() => (selectMode ? onToggleSelect?.(conv) : onSelect(conv))}
       className={`p-4 cursor-pointer hover:bg-gray-50 transition border-b border-gray-100 ${
-        selectedConv?.id === conv.id ? 'bg-indigo-50' : ''
+        selected ? 'bg-indigo-100/60' : selectedConv?.id === conv.id ? 'bg-indigo-50' : ''
       } ${isHighPriority ? 'bg-orange-50/30' : ''}`}
     >
       <div className="flex items-start gap-3">
+        {selectMode && (
+          <div className={`mt-1 h-5 w-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+            selected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300 bg-white'
+          }`}>
+            {selected && <Check className="h-3.5 w-3.5 text-white" />}
+          </div>
+        )}
         <div className={`w-10 h-10 rounded-full ${getAvatarColor(conv.id)} flex items-center justify-center font-medium text-sm flex-shrink-0 relative`}>
           {getInitials(conv.customerName, conv.customerPhone)}
           {isHighPriority && (
@@ -1636,9 +2168,10 @@ function ConversationItem({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1">
-            <h3 className="font-semibold text-sm text-gray-900 truncate">
+            <h3 className={`text-sm truncate ${conv.isUnread ? 'font-semibold text-gray-900' : 'font-normal text-gray-700'}`}>
               {conv.customerName || conv.customerPhone || 'Unknown Customer'}
             </h3>
+            {conv.isUnread && <span className="ml-2 flex-shrink-0 h-2.5 w-2.5 rounded-full bg-indigo-600" />}
           </div>
           <p className="text-xs text-gray-500 mb-0.5">{conv.customerPhone}</p>
           {showSession && conv.businessPhone && (
@@ -1647,7 +2180,7 @@ function ConversationItem({
               {conv.businessPhone}
             </p>
           )}
-          <p className="text-sm text-gray-600 truncate mb-1">{conv.lastMessagePreview}</p>
+          <p className={`text-sm truncate mb-1 ${conv.isUnread ? 'text-gray-800' : 'text-gray-600'}`}>{conv.lastMessagePreview}</p>
           <div className="flex items-center justify-between gap-1 flex-wrap">
             <p className="text-xs text-gray-400">
               {conv.lastMessageAt ? getRelativeTime(conv.lastMessageAt) : 'No messages'}

@@ -82,7 +82,7 @@ export default function Header() {
   };
 
   return (
-    <header className="hidden lg:flex h-16 items-center justify-between px-6 bg-white border-b border-gray-100 shadow-sm animate-fade-in">
+    <header className="hidden lg:flex relative z-40 h-16 items-center justify-between px-6 bg-white border-b border-gray-100 shadow-sm animate-fade-in">
       {/* Page title */}
       <h1 className="text-lg font-bold text-gray-900">{pageTitle}</h1>
 

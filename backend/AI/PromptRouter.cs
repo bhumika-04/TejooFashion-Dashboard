@@ -19,11 +19,6 @@ public class AiRouterService
     {
         try
         {
-            // Step 1: Router prompt determines intent
-            var routerPrompt = await _promptLoader.GetRouterPromptAsync();
-            if (routerPrompt == null)
-                return Escalate("Router prompt not configured");
-
             var contextMessages = conversationHistory
                 .TakeLast(10)
                 .Select(m => new ChatMessage
@@ -33,16 +28,35 @@ public class AiRouterService
                 })
                 .ToList();
 
-            var routerRaw = await _openAiClient.GetChatCompletionAsync(
-                routerPrompt.SystemPrompt, userMessage, contextMessages);
+            // Step 1: Determine intent.
+            // Efficiency: a conservative rule-first check resolves clearly-worded messages without
+            // calling the router LLM at all (regex-first → LLM fallback). Halves OpenAI calls when it hits.
+            string? intent;
+            decimal? routerConfidence;
 
-            if (string.IsNullOrEmpty(routerRaw))
-                return Escalate("Router returned no response");
+            var quickIntent = AiHeuristics.QuickIntent(userMessage);
+            if (quickIntent != null)
+            {
+                intent = quickIntent;
+                routerConfidence = 0.85m;
+            }
+            else
+            {
+                var routerPrompt = await _promptLoader.GetRouterPromptAsync();
+                if (routerPrompt == null)
+                    return Escalate("Router prompt not configured");
 
-            // Parse router JSON: { "intent": "", "reason": "", "confidence": 0-1 }
-            var (intent, routerConfidence) = ParseRouterResponse(routerRaw);
-            if (string.IsNullOrEmpty(intent))
-                return Escalate("Could not parse router intent");
+                var routerRaw = await _openAiClient.GetChatCompletionAsync(
+                    routerPrompt.SystemPrompt, userMessage, contextMessages);
+
+                if (string.IsNullOrEmpty(routerRaw))
+                    return Escalate("Router returned no response");
+
+                // Parse router JSON: { "intent": "", "reason": "", "confidence": 0-1 }
+                (intent, routerConfidence) = ParseRouterResponse(routerRaw);
+                if (string.IsNullOrEmpty(intent))
+                    return Escalate("Could not parse router intent");
+            }
 
             // Validate intent is a known key — prevent long sentence leak from malformed JSON
             var validIntents = new HashSet<string>

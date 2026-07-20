@@ -1,4 +1,3 @@
-using Dapper;
 using TejooWhatsApp.Utilities;
 
 namespace TejooWhatsApp.Repositories;
@@ -39,6 +38,20 @@ public class TagRepository
     public async Task<int> CreateAsync(string name, string color, string type = "conversation")
     {
         using var conn = _db.CreateConnection();
+        return await conn.ExecuteScalarAsync<int>(
+            "INSERT INTO Tags (Name, Color, [Type]) OUTPUT inserted.Id VALUES (@Name, @Color, @Type)",
+            new { Name = name, Color = color, Type = type });
+    }
+
+    /// <summary>Returns the id of the tag with this name+type, creating it if it doesn't exist.</summary>
+    public async Task<int> GetOrCreateByNameAsync(string name, string type = "conversation", string color = "#6366F1")
+    {
+        using var conn = _db.CreateConnection();
+        var existing = await conn.ExecuteScalarAsync<int?>(
+            "SELECT Id FROM Tags WHERE Name = @Name AND [Type] = @Type",
+            new { Name = name, Type = type });
+        if (existing is > 0) return existing.Value;
+
         return await conn.ExecuteScalarAsync<int>(
             "INSERT INTO Tags (Name, Color, [Type]) OUTPUT inserted.Id VALUES (@Name, @Color, @Type)",
             new { Name = name, Color = color, Type = type });

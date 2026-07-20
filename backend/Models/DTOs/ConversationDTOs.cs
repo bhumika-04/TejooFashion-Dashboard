@@ -12,7 +12,8 @@ public class ConversationListDTO
     public string AssignedUserName { get; set; } = string.Empty;
     public string SessionDisplayName { get; set; } = string.Empty;
     public DateTime? LastMessageAt { get; set; }
-    public int UnreadCount { get; set; }
+    public bool IsUnread { get; set; }       // inbound message newer than the viewer's last view
+    public bool HasAiMessages { get; set; }  // drives the "AI Turn" filter on the conversations list
     public string? LastMessagePreview { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? ClosedAt { get; set; }
@@ -61,4 +62,12 @@ public class UpdateConversationRequest
 public class AssignConversationRequest
 {
     public int AssignedUserId { get; set; }
+}
+
+public class BulkActionRequest
+{
+    public int[] Ids { get; set; } = System.Array.Empty<int>();
+    public string Action { get; set; } = "";   // "close" | "assign" | "tag"
+    public int? UserId { get; set; }            // for "assign"
+    public int? TagId { get; set; }             // for "tag"
 }

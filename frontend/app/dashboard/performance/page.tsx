@@ -32,6 +32,7 @@ interface AgentPerformance {
   resolutionRate: number;
   activeConversations: number;
   closedInPeriod: number;
+  hasActivity: boolean;
 }
 
 function SkeletonRow() {
@@ -76,6 +77,7 @@ const PERIODS = [
 
 export default function PerformancePage() {
   const [agents, setAgents] = useState<AgentPerformance[]>([]);
+  const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [selectedPeriod, setSelectedPeriod] = useState('today');
   const [showPeriodMenu, setShowPeriodMenu] = useState(false);
@@ -97,7 +99,12 @@ export default function PerformancePage() {
   const loadPerformanceData = async () => {
     setLoading(true);
     try {
-      const res = await dashboardApi.getPerformance(selectedPeriod as 'today' | 'week' | 'month');
+      const period = selectedPeriod as 'today' | 'week' | 'month';
+      const [res, sumRes] = await Promise.all([
+        dashboardApi.getPerformance(period),
+        dashboardApi.getPerformanceSummary(period).catch(() => ({ data: null })),
+      ]);
+      setSummary(sumRes.data);
       const raw: any[] = res.data ?? [];
       setAgents(raw.map((a) => ({
         id:                   a.userId,
@@ -110,6 +117,9 @@ export default function PerformancePage() {
         resolutionRate:       a.escalationsReceived > 0 ? (a.escalationsResolved / a.escalationsReceived) * 100 : 100,
         activeConversations:  a.activeConversations,
         closedInPeriod:       a.closedInPeriod,
+        // An agent with no handled conversations and no escalations has no basis for a rate —
+        // don't flatter them with a fake 100%/"Excellent".
+        hasActivity:          (a.conversationsHandled ?? 0) > 0 || (a.escalationsReceived ?? 0) > 0,
       })));
     } catch {
       // silently ignore
@@ -126,6 +136,24 @@ export default function PerformancePage() {
   const teamResolutionRate = totalEscalations > 0
     ? ((totalResolved / totalEscalations) * 100).toFixed(1) : 100;
 
+  // Real trend badges computed from the backend's current-vs-previous-window summary.
+  const periodLabel = (PERIODS.find(p => p.key === selectedPeriod)?.label ?? 'Today').toLowerCase();
+  const agentsTrend = { value: `${summary?.agentsActiveCurrent ?? 0} active ${periodLabel}`, isPositive: true, icon: CheckCircle };
+  const convTrend = (() => {
+    if (!summary || (summary.conversationsHandledPrevious ?? 0) <= 0)
+      return { value: 'no prior data', isPositive: true, icon: ArrowUp };
+    const d = ((summary.conversationsHandledCurrent - summary.conversationsHandledPrevious) / summary.conversationsHandledPrevious) * 100;
+    return { value: `${d >= 0 ? '+' : ''}${d.toFixed(0)}% vs prev ${periodLabel}`, isPositive: d >= 0, icon: d >= 0 ? ArrowUp : ArrowDown };
+  })();
+  const respTrend = (() => {
+    const cur = summary?.avgResponseMinutesCurrent, prev = summary?.avgResponseMinutesPrevious;
+    if (cur == null || prev == null || prev <= 0)
+      return { value: 'no prior data', isPositive: true, icon: ArrowDown };
+    const d = ((cur - prev) / prev) * 100;
+    const faster = d <= 0;
+    return { value: `${Math.abs(d).toFixed(0)}% ${faster ? 'faster' : 'slower'}`, isPositive: faster, icon: faster ? ArrowDown : ArrowUp };
+  })();
+
   const getRoleBadgeColor = (role: string) => {
     switch (role) {
       case 'CRR':     return 'bg-green-50 text-green-700 border-green-200';
@@ -135,7 +163,9 @@ export default function PerformancePage() {
     }
   };
 
-  const getPerformanceLevel = (resolutionRate: number) => {
+  const getPerformanceLevel = (agent: AgentPerformance) => {
+    if (!agent.hasActivity)          return { label: 'No activity', color: 'text-gray-400', bg: 'bg-gray-100',  bar: 'bg-gray-200' };
+    const resolutionRate = agent.resolutionRate;
     if (resolutionRate >= 90) return { label: 'Excellent', color: 'text-green-700', bg: 'bg-green-50',  bar: 'bg-green-500' };
     if (resolutionRate >= 70) return { label: 'Good',      color: 'text-blue-700',  bg: 'bg-blue-50',   bar: 'bg-blue-500' };
     if (resolutionRate >= 50) return { label: 'Average',   color: 'text-amber-700', bg: 'bg-amber-50',  bar: 'bg-amber-500' };
@@ -150,7 +180,8 @@ export default function PerformancePage() {
     { ring: 'ring-1 ring-gray-200',   label: '5️⃣' },
   ];
 
-  const sortedAgents = [...agents].sort((a, b) => b.resolutionRate - a.resolutionRate);
+  const sortedAgents = [...agents].sort((a, b) =>
+    (b.hasActivity ? b.resolutionRate : -1) - (a.hasActivity ? a.resolutionRate : -1));
   const filteredAgents = agents.filter(a =>
     a.name.toLowerCase().includes(search.toLowerCase()) ||
     a.role.toLowerCase().includes(search.toLowerCase())
@@ -162,7 +193,7 @@ export default function PerformancePage() {
       ...filteredAgents.map(a => [
         a.name, a.role, a.activeConversations, a.conversationsHandled,
         a.closedInPeriod, a.escalationsReceived, a.escalationsResolved,
-        a.avgResponseTime, `${a.resolutionRate.toFixed(0)}%`,
+        a.avgResponseTime, a.hasActivity ? `${a.resolutionRate.toFixed(0)}%` : 'N/A',
       ]),
     ];
     const csv = rows.map(r => r.join(',')).join('\n');
@@ -182,16 +213,16 @@ export default function PerformancePage() {
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-6 lg:mb-8 items-stretch">
         <KPICard index={0} title="Total Agents" value={agents.length}
           icon={Users} iconColor="text-indigo-600" iconBgColor="bg-indigo-100"
-          trend={{ value: "All active", isPositive: true, icon: CheckCircle }} />
+          trend={agentsTrend} />
         <KPICard index={1} title="Conversations Handled" value={totalConversations}
           icon={MessageSquare} iconColor="text-blue-600" iconBgColor="bg-blue-100"
-          trend={{ value: "12% from last week", isPositive: true, icon: ArrowUp }} />
+          trend={convTrend} />
         <KPICard index={2} title="Escalations Resolved" value={totalResolved}
           icon={CheckCircle} iconColor="text-green-600" iconBgColor="bg-green-100"
           trend={{ value: `${teamResolutionRate}% rate`, isPositive: Number(teamResolutionRate) >= 70, icon: Target }} />
         <KPICard index={3} title="Avg Response Time" value={`${avgTeamResponseTime} min`}
           icon={Clock} iconColor="text-amber-600" iconBgColor="bg-amber-100"
-          trend={{ value: "8% faster", isPositive: true, icon: ArrowDown }} />
+          trend={respTrend} />
         <div className="col-span-2 lg:col-span-1">
           <KPICard index={4} title="Resolution Rate" value={`${teamResolutionRate}%`}
             icon={Target} iconColor="text-purple-600" iconBgColor="bg-purple-100"
@@ -238,7 +269,7 @@ export default function PerformancePage() {
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <div className="bg-gray-50 rounded-xl p-2.5 text-center">
                         <p className="text-gray-400 text-xs mb-0.5">Resolution</p>
-                        <p className="font-bold text-green-600">{agent.resolutionRate.toFixed(0)}%</p>
+                        <p className="font-bold text-green-600">{agent.hasActivity ? `${agent.resolutionRate.toFixed(0)}%` : '—'}</p>
                       </div>
                       <div className="bg-gray-50 rounded-xl p-2.5 text-center">
                         <p className="text-gray-400 text-xs mb-0.5">Avg Time</p>
@@ -369,7 +400,7 @@ export default function PerformancePage() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {filteredAgents.map((agent) => {
-                    const perf = getPerformanceLevel(agent.resolutionRate);
+                    const perf = getPerformanceLevel(agent);
                     const initials = (agent.name || '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || '?';
                     return (
                       <tr key={agent.id} className="group hover:bg-gray-50 hover:shadow-[inset_3px_0_0_#cbd5e1] transition-all duration-150">
@@ -411,9 +442,9 @@ export default function PerformancePage() {
                           <div className="flex items-center gap-2">
                             <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                               <div className={`h-full rounded-full transition-all duration-700 ease-out ${perf.bar}`}
-                                style={{ width: `${agent.resolutionRate}%` }} />
+                                style={{ width: `${agent.hasActivity ? agent.resolutionRate : 0}%` }} />
                             </div>
-                            <span className="font-semibold text-sm text-gray-800 w-8 text-right">{agent.resolutionRate.toFixed(0)}%</span>
+                            <span className="font-semibold text-sm text-gray-800 w-8 text-right">{agent.hasActivity ? `${agent.resolutionRate.toFixed(0)}%` : '—'}</span>
                           </div>
                         </td>
                         <td className="py-3.5 px-4">
@@ -431,7 +462,7 @@ export default function PerformancePage() {
             {/* Mobile Cards */}
             <div className="lg:hidden divide-y divide-gray-50">
               {filteredAgents.map((agent, idx) => {
-                const perf = getPerformanceLevel(agent.resolutionRate);
+                const perf = getPerformanceLevel(agent);
                 const initials = (agent.name || '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || '?';
                 const delays = ['delay-75','delay-150','delay-225','delay-300','delay-375'];
                 return (
@@ -471,9 +502,9 @@ export default function PerformancePage() {
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${perf.bar}`} style={{ width: `${agent.resolutionRate}%` }} />
+                          <div className={`h-full rounded-full ${perf.bar}`} style={{ width: `${agent.hasActivity ? agent.resolutionRate : 0}%` }} />
                         </div>
-                        <span className="font-semibold text-sm text-gray-800">{agent.resolutionRate.toFixed(0)}%</span>
+                        <span className="font-semibold text-sm text-gray-800">{agent.hasActivity ? `${agent.resolutionRate.toFixed(0)}%` : '—'}</span>
                       </div>
                     </div>
                   </div>

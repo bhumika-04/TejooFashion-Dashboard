@@ -33,6 +33,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle');
   const [connectionMessage, setConnectionMessage] = useState('');
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [userSearch, setUserSearch] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToast();
@@ -41,6 +42,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
     const handler = (e: MouseEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
         setShowUserMenu(false);
+        setUserSearch('');
       }
     };
     document.addEventListener('mousedown', handler);
@@ -331,7 +333,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                 <div className="relative" ref={userMenuRef}>
                   <button
                     type="button"
-                    onClick={() => !loading && setShowUserMenu(v => !v)}
+                    onClick={() => { if (!loading) { setShowUserMenu(v => !v); setUserSearch(''); } }}
                     disabled={loading}
                     className="w-full flex items-center justify-between px-4 py-2.5 border-2 border-gray-200 rounded-lg text-sm
                       hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
@@ -346,7 +348,12 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                     </span>
                     <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform duration-200 ${showUserMenu ? 'rotate-180' : ''}`} />
                   </button>
-                  {showUserMenu && (
+                  {showUserMenu && (() => {
+                    const q = userSearch.trim().toLowerCase();
+                    const filtered = q
+                      ? users.filter(u => `${u.fullName} ${u.role} ${u.email ?? ''}`.toLowerCase().includes(q))
+                      : users;
+                    return (
                     <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg">
                       {/* Search inside dropdown */}
                       <div className="p-2 border-b border-gray-100">
@@ -354,34 +361,27 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                           type="text"
                           placeholder="Search user…"
                           autoFocus
-                          onChange={e => {
-                            const q = e.target.value.toLowerCase();
-                            // filter handled inline below — store in a data attribute
-                            e.currentTarget.closest('[data-user-search]')?.setAttribute('data-q', q);
-                            e.currentTarget.closest('[data-user-search]')?.querySelectorAll('[data-name]').forEach(el => {
-                              const name = el.getAttribute('data-name') ?? '';
-                              (el as HTMLElement).style.display = name.includes(q) ? '' : 'none';
-                            });
-                          }}
+                          value={userSearch}
+                          onChange={e => setUserSearch(e.target.value)}
                           onClick={e => e.stopPropagation()}
                           className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-300"
                         />
                       </div>
-                      <div className="max-h-48 overflow-y-auto" data-user-search="">
-                        <button
-                          type="button"
-                          data-name="none"
-                          onClick={() => { setFormData({ ...formData, assignedUserId: null }); setShowUserMenu(false); }}
-                          className="w-full text-left px-4 py-2.5 text-sm text-gray-400 hover:bg-gray-50"
-                        >
-                          — None —
-                        </button>
-                        {users.map((user) => (
+                      <div className="max-h-48 overflow-y-auto">
+                        {!q && (
+                          <button
+                            type="button"
+                            onClick={() => { setFormData({ ...formData, assignedUserId: null }); setShowUserMenu(false); setUserSearch(''); }}
+                            className="w-full text-left px-4 py-2.5 text-sm text-gray-400 hover:bg-gray-50"
+                          >
+                            — None —
+                          </button>
+                        )}
+                        {filtered.map((user) => (
                           <button
                             key={user.id}
                             type="button"
-                            data-name={`${user.fullName} ${user.role}`.toLowerCase()}
-                            onClick={() => { setFormData({ ...formData, assignedUserId: user.id }); setShowUserMenu(false); }}
+                            onClick={() => { setFormData({ ...formData, assignedUserId: user.id }); setShowUserMenu(false); setUserSearch(''); }}
                             className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${
                               formData.assignedUserId === user.id
                                 ? 'bg-indigo-50 text-indigo-700 font-medium'
@@ -389,11 +389,16 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                             }`}
                           >
                             {user.fullName} <span className="text-gray-400">({user.role})</span>
+                            {user.email && <span className="block text-[11px] text-gray-400">{user.email}</span>}
                           </button>
                         ))}
+                        {filtered.length === 0 && (
+                          <p className="px-4 py-3 text-sm text-gray-400 text-center">No users match “{userSearch}”</p>
+                        )}
                       </div>
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
               </div>
 

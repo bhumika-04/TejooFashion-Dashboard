@@ -2,11 +2,15 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { Bell, MessageSquare, AlertTriangle, UserPlus, Settings, CheckCheck } from 'lucide-react';
+import { Bell, MessageSquare, AlertTriangle, UserPlus, Settings, CheckCheck, Volume2, VolumeX, Monitor } from 'lucide-react';
 import { notificationsApi } from '@/services/api';
 import { formatDateOnly } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useSignalR, SignalRNotification } from '@/hooks/useSignalR';
+import {
+  playNotificationSound, showDesktopNotification, ensureDesktopPermission,
+  getSoundEnabled, setSoundEnabled, getDesktopEnabled, setDesktopEnabled,
+} from '@/lib/notify';
 
 interface Notification {
   id: number;
@@ -28,11 +32,29 @@ export function NotificationBell() {
   const [loading, setLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
+  const [soundOn, setSoundOn] = useState(false);
+  const [desktopOn, setDesktopOn] = useState(false);
+  const soundRef = useRef(false);
+  const desktopRef = useRef(false);
+
+  useEffect(() => {
+    const s = getSoundEnabled(); const d = getDesktopEnabled();
+    setSoundOn(s); setDesktopOn(d); soundRef.current = s; desktopRef.current = d;
+  }, []);
 
   const handleRealTimeNotification = useCallback((notification: SignalRNotification) => {
     if (!mountedRef.current) return;
     // Increment badge count immediately
     setUnreadCount(prev => prev + 1);
+    // Audible + desktop alerts (refs so the stable callback reads current prefs)
+    if (soundRef.current) playNotificationSound();
+    if (desktopRef.current) {
+      showDesktopNotification(
+        notification.title || 'New message',
+        notification.message || '',
+        notification.conversationId ? () => router.push(`/dashboard/conversations?id=${notification.conversationId}`) : undefined
+      );
+    }
     // Prepend to dropdown list so it shows up instantly
     const inboxItem: Notification = {
       id: Date.now(), // temporary client-side id
@@ -46,7 +68,22 @@ export function NotificationBell() {
       createdAt: notification.timestamp ?? new Date().toISOString(),
     };
     setNotifications(prev => [inboxItem, ...prev.slice(0, 19)]);
-  }, []);
+  }, [router]);
+
+  const toggleSound = () => {
+    const next = !soundOn;
+    setSoundOn(next); soundRef.current = next; setSoundEnabled(next);
+    if (next) playNotificationSound(); // confirm + unlock audio on this gesture
+  };
+
+  const toggleDesktop = async () => {
+    const next = !desktopOn;
+    if (next) {
+      const ok = await ensureDesktopPermission();
+      if (!ok) return; // permission denied — leave off
+    }
+    setDesktopOn(next); desktopRef.current = next; setDesktopEnabled(next);
+  };
 
   useSignalR(handleRealTimeNotification);
 
@@ -197,17 +234,33 @@ export function NotificationBell() {
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
             <h3 className="font-semibold text-gray-900">Notifications</h3>
-            {unreadCount > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleMarkAllAsRead}
-                className="text-blue-600 hover:text-blue-700 text-xs"
+            <div className="flex items-center gap-1">
+              <button
+                onClick={toggleSound}
+                title={soundOn ? 'Sound on — click to mute' : 'Sound off — click to enable'}
+                className={`p-1.5 rounded-lg transition-colors ${soundOn ? 'text-indigo-600 hover:bg-indigo-50' : 'text-gray-400 hover:bg-gray-100'}`}
               >
-                <CheckCheck className="h-4 w-4 mr-1" />
-                Mark all read
-              </Button>
-            )}
+                {soundOn ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              </button>
+              <button
+                onClick={toggleDesktop}
+                title={desktopOn ? 'Desktop alerts on' : 'Enable desktop alerts'}
+                className={`p-1.5 rounded-lg transition-colors ${desktopOn ? 'text-indigo-600 hover:bg-indigo-50' : 'text-gray-400 hover:bg-gray-100'}`}
+              >
+                <Monitor className="h-4 w-4" />
+              </button>
+              {unreadCount > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleMarkAllAsRead}
+                  className="text-blue-600 hover:text-blue-700 text-xs"
+                >
+                  <CheckCheck className="h-4 w-4 mr-1" />
+                  Mark all read
+                </Button>
+              )}
+            </div>
           </div>
 
           {/* Notifications List */}

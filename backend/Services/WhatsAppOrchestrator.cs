@@ -20,6 +20,8 @@ public class WhatsAppOrchestrator
     private readonly ILogger<WhatsAppOrchestrator> _logger;
     private readonly SystemSettingsRepository _settings;
     private readonly AiBypassRepository _bypassRepo;
+    private readonly TagRepository _tagRepo;
+    private readonly ConversationRepository _conversationRepo;
     private readonly string _interaktBaseUrl;
     private readonly string _metaGraphBaseUrl;
     private readonly string _publicBaseUrl; // ngrok/public URL for media files
@@ -37,7 +39,9 @@ public class WhatsAppOrchestrator
         ILogger<WhatsAppOrchestrator> logger,
         SystemSettingsRepository settings,
         IConfiguration configuration,
-        AiBypassRepository bypassRepo)
+        AiBypassRepository bypassRepo,
+        TagRepository tagRepo,
+        ConversationRepository conversationRepo)
     {
         _sessionRepo = sessionRepo;
         _conversationService = conversationService;
@@ -51,6 +55,8 @@ public class WhatsAppOrchestrator
         _logger = logger;
         _settings = settings;
         _bypassRepo = bypassRepo;
+        _tagRepo = tagRepo;
+        _conversationRepo = conversationRepo;
         _interaktBaseUrl = configuration["ExternalApis:InteraktBaseUrl"] ?? "https://api.interakt.ai";
         _metaGraphBaseUrl = configuration["ExternalApis:MetaGraphBaseUrl"] ?? "https://graph.facebook.com";
         _publicBaseUrl = (configuration["ExternalApis:PublicBaseUrl"] ?? "").TrimEnd('/');
@@ -136,19 +142,35 @@ public class WhatsAppOrchestrator
                 }
                 else
                 {
-                    // No assignee — broadcast so all agents see the unattended conversation
-                    await _notificationService.SendToAllAsync(new NotificationMessage
-                    {
-                        Type = "new_message",
-                        Title = "New unassigned message",
-                        ConversationId = conversation.Id,
-                        CustomerPhone = customerPhone,
-                        CustomerName = customerName ?? customerPhone,
-                        Message = preview,
-                        Timestamp = DateTime.UtcNow
-                    });
+                    // No assignee — live-broadcast to everyone, persist only to Admins (avoids a row
+                    // per user on every message; see NotifyUnassignedMessageAsync).
+                    await _notificationService.NotifyUnassignedMessageAsync(
+                        conversation.Id, customerPhone, customerName ?? customerPhone, preview);
                 }
             }
+
+            // 3a-1. Internal team data-dump (TF#### reports / "CRR/Whatsapp Name" notes) — not a customer
+            //       query. Tag it and skip AI entirely so it never gets an auto-reply.
+            if (AiHeuristics.IsInternalReport(messageContent))
+            {
+                await ApplyAutoTagAsync(conversation.Id, "Internal");
+                await LogWebhookAsync(provider, "Internal report message — saved, AI skipped.", true);
+                return true;
+            }
+
+            // 3a-2. Fast negativity flag (keyword-based, free + instant) — raise priority and tag the
+            //       conversation as a Complaint so angry customers surface immediately.
+            if (AiHeuristics.LooksNegative(messageContent))
+            {
+                await _conversationRepo.UpdatePriorityAsync(conversation.Id, "High");
+                await ApplyAutoTagAsync(conversation.Id, "Complaint");
+            }
+
+            // 3a-3. Rule-based intent tag (free, no LLM) — applies even when AI auto-reply is off, so
+            //        clearly-worded messages still get categorized. The LLM-intent tag (6b) refines this
+            //        when auto-reply is enabled.
+            var ruleTag = AiHeuristics.IntentToTag(AiHeuristics.QuickIntent(messageContent));
+            if (ruleTag != null) await ApplyAutoTagAsync(conversation.Id, ruleTag);
 
             // 3b. Media messages (image/video/audio/document) — acknowledge and route to human
             if (messageType != "text" && session.AutoReplyEnabled)
@@ -172,7 +194,8 @@ public class WhatsAppOrchestrator
                 {
                     await _escalationService.CreateEscalationAsync(
                         conversation.Id, nextUser.Id, null,
-                        $"Media message received ({messageType}) — needs human review", "Normal");
+                        $"Media message received ({messageType}) — needs human review", "Normal",
+                        escalationLevel: EscalationService.LevelForRole(nextUser.Role));
                 }
 
                 await LogWebhookAsync(provider, $"Media message ({messageType}) acknowledged and routed to agent.", true);
@@ -225,7 +248,8 @@ public class WhatsAppOrchestrator
                 {
                     await _escalationService.CreateEscalationAsync(
                         conversation.Id, fallbackUser.Id, null,
-                        "AI unavailable — requires human review", "Normal");
+                        "AI unavailable — requires human review", "Normal",
+                        escalationLevel: EscalationService.LevelForRole(fallbackUser.Role));
                 }
                 else
                 {
@@ -235,9 +259,18 @@ public class WhatsAppOrchestrator
                 return true;
             }
 
+            // 6b. Auto-tag the conversation from the detected intent (reuses the router intent — no extra AI cost)
+            var intentTag = AiHeuristics.IntentToTag(aiResponse.Intent);
+            if (intentTag != null) await ApplyAutoTagAsync(conversation.Id, intentTag);
+
             // 7. Check if escalation is needed
             if (aiResponse.ShouldEscalate || (aiResponse.Confidence.HasValue && aiResponse.Confidence < 0.5m))
             {
+                // Acknowledge the customer so they aren't left in silence while a human picks this up.
+                const string escalateAck = "Thank you for your message! Our team will look into this and get back to you shortly.";
+                await _messageService.SaveOutboundMessageAsync(conversation.Id, escalateAck, isAiGenerated: false);
+                try { await SendWhatsAppMessageAsync(session, customerPhone, escalateAck, provider); } catch { /* best effort */ }
+
                 // Escalate to CRR
                 var nextUser = await _escalationService.GetNextEscalationUserAsync(conversation.AssignedUserId);
                 if (nextUser != null)
@@ -248,13 +281,14 @@ public class WhatsAppOrchestrator
                         nextUser.Id,
                         null,
                         escalationReason,
-                        "Normal");
+                        "Normal",
+                        escalationLevel: EscalationService.LevelForRole(nextUser.Role));
                 }
                 return true;
             }
 
             // 8. Increment session message counter
-            await _sessionRepo.IncrementMessagesTodayAsync(session.Id);
+            await _sessionRepo.TouchLastActiveAsync(session.Id);
 
             // 9. Send AI response
             if (!string.IsNullOrEmpty(aiResponse.ResponseText))
@@ -287,21 +321,30 @@ public class WhatsAppOrchestrator
         }
     }
 
-    public async Task<bool> SendManualMessageAsync(int conversationId, string content, string messageType = "text", string? mediaUrl = null)
+    public async Task<(bool Success, string? Error)> SendManualMessageAsync(int conversationId, string content, string messageType = "text", string? mediaUrl = null)
     {
         try
         {
             var conversation = await _conversationService.GetConversationDetailAsync(conversationId);
-            if (conversation == null) return false;
+            if (conversation == null) return (false, "Conversation not found");
 
             var session = await _sessionRepo.GetByIdAsync(conversation.SessionId);
-            if (session == null) return false;
+            if (session == null) return (false, "No WhatsApp session configured for this conversation");
 
-            // Convert relative local URL to fully-qualified public URL so Interakt/Meta can download the media
-            // e.g. /uploads/conversations/1/file.jpg → https://ngrok-url/uploads/conversations/1/file.jpg
-            var publicMediaUrl = mediaUrl;
-            if (!string.IsNullOrEmpty(mediaUrl) && mediaUrl.StartsWith('/') && !string.IsNullOrEmpty(_publicBaseUrl))
-                publicMediaUrl = _publicBaseUrl + mediaUrl;
+            // Convert a locally-hosted media URL to a publicly reachable one so Interakt/Meta can download it.
+            // Handles both relative ("/uploads/..") and absolute localhost ("http://localhost:5000/uploads/..") forms.
+            var publicMediaUrl = ToPublicMediaUrl(mediaUrl);
+
+            var isMedia = messageType is "image" or "video" or "audio" or "document";
+            if (isMedia && !string.IsNullOrEmpty(mediaUrl))
+            {
+                if (string.IsNullOrEmpty(_publicBaseUrl))
+                    _logger.LogWarning("Sending media but ExternalApis:PublicBaseUrl is not configured — Interakt/Meta cannot reach a localhost URL ({MediaUrl}).", mediaUrl);
+                else if (IsLocalMediaUrl(publicMediaUrl))
+                    _logger.LogWarning("Media URL still looks local after conversion ({MediaUrl}) — check PublicBaseUrl.", publicMediaUrl);
+                else
+                    _logger.LogInformation("Sending {Type} to {Phone} via public media URL {Url}", messageType, conversation.CustomerPhone, publicMediaUrl);
+            }
 
             // Save outbound message (store local/original URL in DB)
             var message = await _messageService.SaveOutboundMessageAsync(
@@ -317,15 +360,109 @@ public class WhatsAppOrchestrator
                 await _messageRepo.UpdateDeliveryAsync(message.Id, providerMsgId);
             else
                 _logger.LogWarning("Provider returned no message ID for manual message {MessageId}", message.Id);
-            await _sessionRepo.IncrementMessagesTodayAsync(session.Id);
+            await _sessionRepo.TouchLastActiveAsync(session.Id);
 
-            return true;
+            return (true, null);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "SendManualMessageAsync failed for conversationId {ConversationId}", conversationId);
-            return false;
+            return (false, FriendlySendError(ex.Message));
         }
+    }
+
+    /// <summary>Turns a raw provider/send exception into a short, agent-readable reason.</summary>
+    private static string FriendlySendError(string raw)
+    {
+        // Extract the provider's JSON "message" field if the error embeds one
+        var brace = raw.IndexOf('{');
+        if (brace >= 0)
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(raw[brace..]);
+                if (doc.RootElement.TryGetProperty("message", out var m) && m.GetString() is { } msg)
+                    raw = msg;
+            }
+            catch { /* not JSON — keep raw */ }
+        }
+        raw = raw.Replace("Please correct the following error - ", "").Trim();
+
+        if (raw.Contains("24 hour", StringComparison.OrdinalIgnoreCase))
+            return "WhatsApp 24-hour window is closed — this customer hasn't messaged in the last 24 hours, so a free-text reply can't be sent. Use an approved template, or wait for them to message again.";
+
+        return string.IsNullOrWhiteSpace(raw) ? "Failed to send message" : raw;
+    }
+
+    /// <summary>Adds a conversation tag (creating it if needed). Best-effort — never breaks message processing.</summary>
+    private async Task ApplyAutoTagAsync(int conversationId, string tagName)
+    {
+        try
+        {
+            var tagId = await _tagRepo.GetOrCreateByNameAsync(tagName, "conversation", AiHeuristics.TagColor(tagName));
+            await _tagRepo.AddToConversationAsync(conversationId, tagId, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Auto-tag '{Tag}' failed for conversation {Id}", tagName, conversationId);
+        }
+    }
+
+    /// <summary>
+    /// Converts a locally-hosted media URL (relative "/uploads/..." or an absolute
+    /// http://localhost / 127.0.0.1 / [::1] URL) into a publicly reachable URL using the
+    /// configured PublicBaseUrl, so Interakt/Meta can actually download the file.
+    /// URLs that are already remote (e.g. Interakt CDN links when forwarding) are left untouched.
+    /// </summary>
+    private string? ToPublicMediaUrl(string? mediaUrl)
+    {
+        if (string.IsNullOrEmpty(mediaUrl) || string.IsNullOrEmpty(_publicBaseUrl))
+            return mediaUrl;
+
+        // Relative path → prefix the public base URL
+        if (mediaUrl.StartsWith('/'))
+            return _publicBaseUrl + mediaUrl;
+
+        // Absolute localhost URL → swap the scheme+host for the public base URL, keep the path
+        if (Uri.TryCreate(mediaUrl, UriKind.Absolute, out var uri) && IsLocalHost(uri.Host))
+            return _publicBaseUrl + uri.PathAndQuery;
+
+        // Already a public/remote URL (ngrok, CDN, etc.) — send as-is
+        return mediaUrl;
+    }
+
+    private static bool IsLocalMediaUrl(string? mediaUrl) =>
+        !string.IsNullOrEmpty(mediaUrl)
+        && Uri.TryCreate(mediaUrl, UriKind.Absolute, out var uri)
+        && IsLocalHost(uri.Host);
+
+    private static bool IsLocalHost(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+        || host == "127.0.0.1"
+        || host == "::1";
+
+    // 3-digit calling codes that a naive "length >= 12 ? 2 : 1" split would wrongly read as 2 digits
+    // (e.g. UAE 971 → "+97"). Covers the Gulf + South-Asia markets alongside India (+91).
+    private static readonly string[] _threeDigitCallingCodes =
+        { "971", "966", "968", "973", "974", "965", "880", "977", "975", "960", "998", "995" };
+
+    /// <summary>
+    /// Splits a full WhatsApp number into Interakt's (countryCode, phoneNumber) parts.
+    /// Recognises known 3-digit codes first, then falls back to a length heuristic
+    /// (12+ digits ⇒ 2-digit code like India +91, otherwise 1-digit like US +1).
+    /// </summary>
+    private static (string CountryCode, string PhoneNumber) SplitInteraktNumber(string to)
+    {
+        var digits = to.TrimStart('+').Trim();
+        if (digits.Length < 3)
+            throw new InvalidOperationException($"Cannot parse phone number for Interakt: '{to}'");
+
+        foreach (var cc in _threeDigitCallingCodes)
+            if (digits.StartsWith(cc, StringComparison.Ordinal) && digits.Length > cc.Length)
+                return ("+" + cc, digits[cc.Length..]);
+
+        var n = digits.Length >= 12 ? 2 : 1;
+        return ("+" + digits[..n], digits[n..]);
     }
 
     private async Task<string?> SendWhatsAppMessageAsync(
@@ -345,13 +482,7 @@ public class WhatsAppOrchestrator
     {
         var url = $"{_interaktBaseUrl}/v1/public/message/";
 
-        var digits = to.TrimStart('+');
-        if (digits.Length < 3)
-            throw new InvalidOperationException($"Cannot parse phone number for Interakt: '{to}'");
-
-        var countryCodeDigits = digits.Length >= 12 ? 2 : 1;
-        var countryCode = "+" + digits[..countryCodeDigits];
-        var phoneNumber = digits[countryCodeDigits..];
+        var (countryCode, phoneNumber) = SplitInteraktNumber(to);
 
         // Map messageType to Interakt type string + data shape
         object data;

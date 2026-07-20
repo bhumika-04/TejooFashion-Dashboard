@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { customersApi, tagsApi } from '@/services/api';
-import { Search, Phone, Mail, MessageSquare, RefreshCw, ChevronLeft, ChevronRight, X, Users, UserCheck, Sparkles, Clock, Tag, Plus } from 'lucide-react';
+import { Search, Phone, Mail, MessageSquare, RefreshCw, ChevronLeft, ChevronRight, X, Users, UserCheck, Sparkles, Clock, Tag, Plus, Check, Download, Filter, ChevronDown } from 'lucide-react';
 import { getRelativeTime } from '@/lib/utils';
 import { KPICard } from '@/components/ui/kpi-card';
+import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 
 export default function CustomersPage() {
@@ -14,6 +16,7 @@ export default function CustomersPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [filterTagId, setFilterTagId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [conversations, setConversations] = useState<any[]>([]);
@@ -24,14 +27,23 @@ export default function CustomersPage() {
   const [allTags, setAllTags] = useState<any[]>([]);
   const [showTagMenu, setShowTagMenu] = useState(false);
   const tagMenuRef = useRef<HTMLDivElement>(null);
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
+  const [exporting, setExporting] = useState(false);
+  // Bulk multi-select tagging
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showBulkTag, setShowBulkTag] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const bulkTagRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToast();
   const PAGE_SIZE = 20;
   const searchTimer = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchCustomers = async (p = page, q = search) => {
+  const fetchCustomers = async (p = page, q = search, tagId = filterTagId) => {
     setLoading(true);
     try {
-      const res = await customersApi.getAll(q || undefined, p, PAGE_SIZE);
+      const res = await customersApi.getAll(q || undefined, p, PAGE_SIZE, tagId ?? undefined);
       setCustomers(res.data.customers ?? []);
       setTotal(res.data.total ?? 0);
     } catch {
@@ -42,12 +54,18 @@ export default function CustomersPage() {
   };
 
   useEffect(() => {
-    fetchCustomers(1, '');
+    // Honor ?search= (e.g. drill-down from Reports → Top Customers) by prefilling + filtering.
+    const initial = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('search') ?? ''
+      : '';
+    if (initial) { setSearchInput(initial); setSearch(initial); }
+    fetchCustomers(1, initial);
     customersApi.getStats().then(r => setStats(r.data)).catch(() => {});
     tagsApi.getAll('customer').then(r => setAllTags(r.data ?? [])).catch(() => {});
     // Close tag menu on outside click
     const handler = (e: MouseEvent) => {
       if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node)) setShowTagMenu(false);
+      if (filterMenuRef.current && !filterMenuRef.current.contains(e.target as Node)) setShowFilterMenu(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -74,6 +92,82 @@ export default function CustomersPage() {
     setPage(p);
     fetchCustomers(p, search);
   };
+
+  const handleTagFilter = (tagId: number | null) => {
+    const next = filterTagId === tagId ? null : tagId;
+    setFilterTagId(next);
+    setPage(1);
+    fetchCustomers(1, search, next);
+  };
+
+  // Export the current (searched / filtered) customer list to CSV.
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const res = await customersApi.getAll(search || undefined, 1, Math.max(total, 1), filterTagId ?? undefined);
+      const rows: any[] = res.data.customers ?? [];
+      const tagNames = (raw?: string) => (raw || '').split(';;').filter(Boolean).map(t => t.split('|')[0]).join('; ');
+      const cell = (v: any) => {
+        const s = String(v ?? '');
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const header = ['Sr. No.', 'Mobile Number', 'Name', 'Total Conversations', 'Conversation Tags', 'Customer Tags', 'Last Status'];
+      const lines = rows.map((c, i) => [
+        i + 1, c.phone, c.name ?? '', c.totalConversations ?? 0,
+        tagNames(c.convTagsRaw), tagNames(c.tagsRaw), c.lastStatus ?? '',
+      ].map(cell).join(','));
+      const csv = [header.join(','), ...lines].join('\n');
+      const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `customers-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast(`Exported ${rows.length} customers`, 'success');
+    } catch {
+      showToast('Export failed', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // ── Bulk multi-select tagging ──
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  };
+  const exitSelect = () => { setSelectMode(false); setSelectedIds(new Set()); setShowBulkTag(false); };
+  const selectAllVisible = () => {
+    const ids = customers.map(c => c.id);
+    setSelectedIds(prev => (prev.size === ids.length && ids.length > 0 ? new Set() : new Set(ids)));
+  };
+  const runBulkTag = async (tagId: number, action: 'add' | 'remove') => {
+    if (selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const res = await customersApi.bulkTag([...selectedIds], tagId, action);
+      const tagName = allTags.find(t => t.id === tagId)?.name ?? 'tag';
+      showToast(`${action === 'add' ? 'Tagged' : 'Removed tag from'} ${res.data.affected} customer${res.data.affected === 1 ? '' : 's'} — ${tagName}`, 'success');
+      exitSelect();
+      fetchCustomers(page, search);
+      if (selected) customersApi.getTags(selected.id).then(r => setCustomerTags(r.data ?? [])).catch(() => {});
+    } catch {
+      showToast('Bulk tag failed', 'error');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  // Close bulk-tag popover on outside click
+  useEffect(() => {
+    if (!showBulkTag) return;
+    const h = (e: MouseEvent) => { if (bulkTagRef.current && !bulkTagRef.current.contains(e.target as Node)) setShowBulkTag(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [showBulkTag]);
 
   const openCustomer = async (c: any) => {
     setSelected(c);
@@ -145,21 +239,11 @@ export default function CustomersPage() {
 
       <div className="flex flex-1 min-h-0 gap-0">
       {/* Left: Customer list */}
-      <div className={`flex flex-col bg-white border-r border-gray-100 transition-all duration-200 ${selected ? 'w-[420px] flex-shrink-0' : 'flex-1'}`}>
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Customers</h1>
-            <p className="text-xs text-gray-400 mt-0.5">{total} total</p>
-          </div>
-          <button onClick={() => fetchCustomers(page, search)} className="p-2 rounded-lg hover:bg-gray-50 text-gray-400 hover:text-gray-600 transition-colors">
-            <RefreshCw className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Search */}
-        <div className="px-4 py-3 border-b border-gray-100">
-          <div className="relative">
+      <div className="flex flex-col flex-1 bg-white border-r border-gray-100">
+        {/* Toolbar: search + filter + export + select + refresh — all in one row */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+          {/* Search */}
+          <div className="relative flex-1 min-w-0">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
             <input
               value={searchInput}
@@ -173,10 +257,124 @@ export default function CustomersPage() {
               </button>
             )}
           </div>
+
+          {/* Filter dropdown (tags) */}
+          {allTags.length > 0 && (
+            <div className="relative flex-shrink-0" ref={filterMenuRef}>
+              <button
+                onClick={() => setShowFilterMenu(v => !v)}
+                className={`flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border transition-colors ${
+                  filterTagId ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <Filter className="h-4 w-4" /> Filter
+                {filterTagId && <span className="h-1.5 w-1.5 rounded-full bg-indigo-600" />}
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {showFilterMenu && (
+                <div className="absolute right-0 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Filter by tag</p>
+                    {filterTagId && (
+                      <button onClick={() => handleTagFilter(null)} className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-0.5">
+                        <X className="h-3 w-3" /> Clear
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {allTags.map(tag => {
+                      const active = filterTagId === tag.id;
+                      return (
+                        <button
+                          key={tag.id}
+                          onClick={() => handleTagFilter(tag.id)}
+                          className="text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all"
+                          style={active
+                            ? { backgroundColor: tag.color, color: '#fff', borderColor: tag.color }
+                            : { backgroundColor: tag.color + '15', color: tag.color, borderColor: tag.color + '44' }}
+                        >
+                          {tag.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Export */}
+          <button
+            onClick={exportCsv}
+            disabled={exporting}
+            className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 flex-shrink-0"
+          >
+            <Download className="h-4 w-4" /> {exporting ? 'Exporting…' : 'Export'}
+          </button>
+
+          {/* Select */}
+          {allTags.length > 0 && (
+            <button
+              onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
+              className={`flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border transition-colors flex-shrink-0 ${
+                selectMode ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <Check className="h-4 w-4" /> {selectMode ? 'Done' : 'Select'}
+            </button>
+          )}
+
+          {/* Refresh */}
+          <button onClick={() => fetchCustomers(page, search)} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0">
+            <RefreshCw className="h-4 w-4" />
+          </button>
         </div>
 
-        {/* List */}
-        <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
+        {/* Bulk-tag action bar */}
+        {selectMode && (
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-indigo-100 bg-indigo-50/60 flex-wrap">
+            <button onClick={selectAllVisible} className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 px-1.5">
+              {selectedIds.size === customers.length && customers.length > 0 ? 'Clear' : 'All'}
+            </button>
+            <span className="text-[11px] font-medium text-gray-600">{selectedIds.size} selected</span>
+            <div className="flex-1" />
+            <div className="relative" ref={bulkTagRef}>
+              <button
+                onClick={() => setShowBulkTag(v => !v)}
+                disabled={selectedIds.size === 0 || bulkBusy}
+                className="flex items-center gap-1 text-[11px] font-medium text-indigo-700 hover:text-indigo-900 px-2 py-1 rounded-lg hover:bg-indigo-100 disabled:opacity-40"
+              >
+                <Tag className="h-3.5 w-3.5" /> Tag
+              </button>
+              {showBulkTag && (
+                <div className="absolute right-0 mt-1 w-52 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1">
+                  <p className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide">Add / remove tag</p>
+                  {allTags.map(tag => (
+                    <div key={tag.id} className="flex items-center justify-between px-3 py-1.5 hover:bg-gray-50">
+                      <span className="flex items-center gap-2 text-xs text-gray-700 truncate">
+                        <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: tag.color || '#6366f1' }} />
+                        {tag.name}
+                      </span>
+                      <span className="flex items-center gap-1 flex-shrink-0">
+                        <button onClick={() => runBulkTag(tag.id, 'add')} title="Add to selected"
+                          className="text-[10px] font-semibold text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded">+ Add</button>
+                        <button onClick={() => runBulkTag(tag.id, 'remove')} title="Remove from selected"
+                          className="text-[10px] font-semibold text-gray-400 hover:text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded">Remove</button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button onClick={exitSelect} className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+
+        {/* Table */}
+        <div className="flex-1 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center h-32 text-gray-400 text-sm">Loading…</div>
           ) : customers.length === 0 ? (
@@ -188,51 +386,118 @@ export default function CustomersPage() {
               <p className="text-xs text-gray-400">Customers appear here once they message your WhatsApp number</p>
             </div>
           ) : (
-            customers.map(c => (
-              <button
-                key={c.id}
-                onClick={() => openCustomer(c)}
-                className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-center gap-3 ${selected?.id === c.id ? 'bg-indigo-50' : ''}`}
-              >
-                <div className="h-9 w-9 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
-                  <span className="text-xs font-semibold text-indigo-700">
-                    {getAvatar(c.name, c.phone)}
-                  </span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{c.name ?? c.phone}</p>
-                  <p className="text-xs text-gray-400 truncate">{c.phone}</p>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-xs text-gray-500">{c.totalConversations ?? 0} conv.</p>
-                  {c.lastSeenAt && <p className="text-[11px] text-gray-300">{getRelativeTime(c.lastSeenAt)}</p>}
-                </div>
-              </button>
-            ))
+            <table className="w-full text-sm border-collapse">
+              <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
+                <tr className="border-b border-gray-200">
+                  {selectMode && <th className="w-10 px-3 py-2.5" />}
+                  <th className="text-center font-semibold px-3 py-2.5 w-14">Sr. No.</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Mobile Number</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Name</th>
+                  <th className="text-center font-semibold px-3 py-2.5 whitespace-nowrap">Total Conv</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Conv Tag</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Customer Tag</th>
+                  <th className="text-center font-semibold px-4 py-2.5 whitespace-nowrap">Last Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {customers.map((c, idx) => {
+                  const checked = selectedIds.has(c.id);
+                  const custTags = (c.tagsRaw || '').split(';;').filter(Boolean);
+                  const convTags = (c.convTagsRaw || '').split(';;').filter(Boolean);
+                  const srNo = (page - 1) * PAGE_SIZE + idx + 1;
+                  const statusCls: Record<string, string> = {
+                    Open: 'bg-green-50 text-green-700 border-green-200',
+                    Escalated: 'bg-amber-50 text-amber-700 border-amber-200',
+                    Closed: 'bg-gray-100 text-gray-500 border-gray-200',
+                  };
+                  const renderChips = (list: string[]) =>
+                    list.slice(0, 3).map((t: string, i: number) => {
+                      const [name, color] = t.split('|');
+                      const col = color || '#6366f1';
+                      return (
+                        <span key={i} className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border leading-none whitespace-nowrap"
+                          style={{ color: col, borderColor: col + '55', backgroundColor: col + '15' }}>
+                          {name}
+                        </span>
+                      );
+                    });
+                  return (
+                    <tr
+                      key={c.id}
+                      onClick={() => (selectMode ? toggleSelect(c.id) : openCustomer(c))}
+                      className={`cursor-pointer transition-colors ${
+                        checked ? 'bg-indigo-50' : selected?.id === c.id ? 'bg-indigo-50/60' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      {selectMode && (
+                        <td className="px-3 py-3 align-middle">
+                          <div className={`h-5 w-5 rounded-md border-2 flex items-center justify-center transition-colors ${
+                            checked ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300 bg-white'
+                          }`}>
+                            {checked && <Check className="h-3.5 w-3.5 text-white" />}
+                          </div>
+                        </td>
+                      )}
+                      <td className="px-3 py-3 align-middle text-center text-xs text-gray-400 tabular-nums">{srNo}</td>
+                      <td className="px-4 py-3 align-middle text-gray-700 whitespace-nowrap">{c.phone}</td>
+                      <td className="px-4 py-3 align-middle">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                            <span className="text-[11px] font-semibold text-indigo-700">{getAvatar(c.name, c.phone)}</span>
+                          </div>
+                          <span className="font-semibold text-gray-900 truncate">{c.name ?? '—'}</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 align-middle text-center">
+                        <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full whitespace-nowrap">
+                          {c.totalConversations ?? 0}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 align-middle">
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {convTags.length ? (
+                            <>{renderChips(convTags)}{convTags.length > 3 && <span className="text-[9px] text-gray-400">+{convTags.length - 3}</span>}</>
+                          ) : <span className="text-xs text-gray-300">—</span>}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 align-middle">
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {custTags.length ? (
+                            <>{renderChips(custTags)}{custTags.length > 3 && <span className="text-[9px] text-gray-400">+{custTags.length - 3}</span>}</>
+                          ) : <span className="text-xs text-gray-300">—</span>}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 align-middle text-center">
+                        {c.lastStatus ? (
+                          <span className={`text-[11px] px-2 py-0.5 rounded-full border font-medium whitespace-nowrap ${statusCls[c.lastStatus] ?? 'bg-gray-100 text-gray-500 border-gray-200'}`}>
+                            {c.lastStatus}
+                          </span>
+                        ) : <span className="text-xs text-gray-300">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
         </div>
 
         {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 text-xs text-gray-500">
-            <span>Page {page} of {totalPages}</span>
-            <div className="flex gap-1">
-              <button disabled={page === 1} onClick={() => handlePageChange(page - 1)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-40">
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <button disabled={page === totalPages} onClick={() => handlePageChange(page + 1)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-40">
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        )}
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          onChange={handlePageChange}
+          summary={total > 0 ? `Showing ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, total)} of ${total}` : undefined}
+        />
       </div>
 
-      {/* Right: Customer detail */}
-      {selected && (
-        <div className="flex-1 min-w-0 flex flex-col bg-gray-50 overflow-y-auto">
+      {/* Customer detail — popup modal (portaled above the app chrome) */}
+      {selected && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setSelected(null); setEditing(false); }} />
+          <div className="relative z-[151] w-full max-w-4xl max-h-[90vh] flex flex-col bg-gray-50 rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
           {/* Detail header */}
-          <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between">
+          <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-3">
               <div className="h-11 w-11 rounded-full bg-indigo-100 flex items-center justify-center">
                 <span className="text-sm font-bold text-indigo-700">
@@ -256,7 +521,7 @@ export default function CustomersPage() {
             </div>
           </div>
 
-          <div className="flex-1 p-6 space-y-5">
+          <div className="flex-1 p-6 space-y-5 overflow-y-auto">
             {/* Info card */}
             <div className="bg-white rounded-xl border border-gray-100 p-5 space-y-3">
               <h3 className="text-sm font-semibold text-gray-700">Contact Info</h3>
@@ -499,7 +764,9 @@ export default function CustomersPage() {
               )}
             </div>
           </div>
-        </div>
+          </div>
+        </div>,
+        document.body
       )}
       </div>
     </div>

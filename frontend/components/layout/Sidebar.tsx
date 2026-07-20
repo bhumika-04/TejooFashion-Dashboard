@@ -6,8 +6,8 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard, Phone, MessageSquare, AlertTriangle, BarChart3,
   ChevronLeft, ChevronRight, ChevronDown,
-  Settings, TrendingUp, UserRound, Zap,
-  User, Users, ShieldCheck, UsersRound, ClipboardList, Webhook,
+  Settings, TrendingUp, UserRound, Zap, Images,
+  User, Users, ShieldCheck, UsersRound, ClipboardList, Webhook, Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -17,6 +17,7 @@ const MAIN_NAV = [
   { name: 'Sessions',            href: '/dashboard/sessions',      icon: Phone,           page: 'sessions' },
   { name: 'Conversations',       href: '/dashboard/conversations', icon: MessageSquare,   page: 'conversations' },
   { name: 'Customers',           href: '/dashboard/customers',     icon: UserRound,       page: 'customers' },
+  { name: 'Gallery',             href: '/dashboard/gallery',       icon: Images,          page: 'gallery' },
   { name: 'Escalations',         href: '/dashboard/escalations',   icon: AlertTriangle,   page: 'escalations' },
   { name: 'Reports & Analytics', href: '/dashboard/reports',       icon: BarChart3,       page: 'reports' },
   { name: 'Performance',         href: '/dashboard/performance',   icon: TrendingUp,      page: 'performance' },
@@ -29,6 +30,7 @@ const SETTINGS_SUB = [
   { name: 'Teams',            href: '/dashboard/teams',           icon: UsersRound,    page: 'teams' },
   { name: 'Audit Logs',       href: '/dashboard/audit-logs',      icon: ClipboardList, page: 'audit-logs' },
   { name: 'Webhook Logs',     href: '/dashboard/webhook-logs',    icon: Webhook,       page: 'webhook-logs' },
+  { name: 'System Health',    href: '/dashboard/system',          icon: Activity,      page: 'system-health' },
 ];
 
 const SETTINGS_PAGES = new Set(SETTINGS_SUB.map(s => s.href));

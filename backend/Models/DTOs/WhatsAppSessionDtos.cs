@@ -13,6 +13,7 @@ public class WhatsAppSessionDTO
     public bool AutoReplyEnabled { get; set; }
     public int MessagesToday { get; set; }
     public DateTime? LastActiveAt { get; set; }
+    public DateTime? LastInboundAt { get; set; }   // newest inbound message — drives the "receiving / stale" indicator
     public DateTime CreatedAt { get; set; }
     // Returned for edit pre-fill — internal dashboard only
     public string? ApiKey { get; set; }

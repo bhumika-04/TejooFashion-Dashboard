@@ -1,4 +1,3 @@
-using Dapper;
 using TejooWhatsApp.Models.Entities;
 using TejooWhatsApp.Utilities;
 
@@ -31,32 +30,18 @@ public class ConversationRepository
         return await conn.QueryFirstOrDefaultAsync<Conversation>(sql, new { SessionId = sessionId, CustomerPhone = customerPhone });
     }
 
-    public async Task<List<Conversation>> GetAllAsync(string? status = null, int? assignedUserId = null)
-    {
-        using var conn = _db.CreateConnection();
-        var sql = "SELECT * FROM Conversations WHERE 1=1";
-
-        if (!string.IsNullOrEmpty(status))
-            sql += " AND Status = @Status";
-
-        if (assignedUserId.HasValue)
-            sql += " AND AssignedUserId = @AssignedUserId";
-
-        sql += " ORDER BY CASE WHEN LastMessageAt IS NULL THEN 1 ELSE 0 END, LastMessageAt DESC, CreatedAt DESC";
-
-        var result = await conn.QueryAsync<Conversation>(sql, new { Status = status, AssignedUserId = assignedUserId });
-        return result.ToList();
-    }
-
     // Returns conversations joined with last message content — avoids N+1 for list views
     public async Task<List<ConversationListRow>> GetAllWithLastMessageAsync(
         string? status = null,
         int? assignedUserId = null,
         int? sessionId = null,
         int limit = 100,
-        int offset = 0)
+        int offset = 0,
+        int? viewerUserId = null)
     {
         using var conn = _db.CreateConnection();
+        // IsUnread = the conversation has an inbound message newer than the viewer's last view
+        // (or never viewed). Per-user via ConversationViews.
         var sql = @"
             SELECT
                 c.*,
@@ -66,10 +51,16 @@ public class ConversationRepository
                 m.Content AS LastMessageContent,
                 CAST(CASE WHEN EXISTS (
                     SELECT 1 FROM Messages WHERE ConversationId = c.Id AND IsAiGenerated = 1
-                ) THEN 1 ELSE 0 END AS BIT) AS HasAiMessages
+                ) THEN 1 ELSE 0 END AS BIT) AS HasAiMessages,
+                CAST(CASE WHEN @ViewerUserId IS NOT NULL AND c.Status <> 'Closed' AND EXISTS (
+                    SELECT 1 FROM Messages mi
+                    WHERE mi.ConversationId = c.Id AND mi.Direction = 'inbound'
+                      AND mi.CreatedAt > ISNULL(cv.LastViewedAt, '1900-01-01')
+                ) THEN 1 ELSE 0 END AS BIT) AS IsUnread
             FROM Conversations c
             LEFT JOIN Users u ON c.AssignedUserId = u.Id
             LEFT JOIN WhatsAppSessions s ON c.SessionId = s.Id
+            LEFT JOIN ConversationViews cv ON cv.ConversationId = c.Id AND cv.UserId = @ViewerUserId
             LEFT JOIN Messages m ON m.Id = (
                 SELECT TOP 1 Id FROM Messages
                 WHERE ConversationId = c.Id
@@ -90,8 +81,68 @@ public class ConversationRepository
                   OFFSET @Offset ROWS FETCH NEXT @Limit ROWS ONLY";
 
         var result = await conn.QueryAsync<ConversationListRow>(sql,
-            new { Status = status, AssignedUserId = assignedUserId, SessionId = sessionId, Offset = offset, Limit = limit });
+            new { Status = status, AssignedUserId = assignedUserId, SessionId = sessionId, Offset = offset, Limit = limit, ViewerUserId = viewerUserId });
         return result.ToList();
+    }
+
+    /// <summary>Records that a user has viewed a conversation (upsert into ConversationViews).</summary>
+    public async Task MarkViewedAsync(int conversationId, int userId)
+    {
+        using var conn = _db.CreateConnection();
+        await conn.ExecuteAsync(@"
+            MERGE ConversationViews AS t
+            USING (SELECT @ConversationId AS ConversationId, @UserId AS UserId) AS src
+              ON t.ConversationId = src.ConversationId AND t.UserId = src.UserId
+            WHEN MATCHED THEN UPDATE SET LastViewedAt = GETUTCDATE()
+            WHEN NOT MATCHED THEN INSERT (ConversationId, UserId, LastViewedAt)
+                 VALUES (@ConversationId, @UserId, GETUTCDATE());",
+            new { ConversationId = conversationId, UserId = userId });
+    }
+
+    /// <summary>Total / open / escalated / closed / unread counts for the same filters as the list (ignores paging).</summary>
+    public async Task<ConversationCounts> GetCountsAsync(int? assignedUserId = null, int? sessionId = null, int? viewerUserId = null)
+    {
+        using var conn = _db.CreateConnection();
+        var filter = " WHERE 1=1";
+        if (assignedUserId.HasValue) filter += " AND c.AssignedUserId = @AssignedUserId";
+        if (sessionId.HasValue)      filter += " AND c.SessionId = @SessionId";
+        var p = new { AssignedUserId = assignedUserId, SessionId = sessionId, ViewerUserId = viewerUserId };
+
+        var counts = await conn.QueryFirstOrDefaultAsync<ConversationCounts>($@"
+            SELECT
+                COUNT(*)                                              AS Total,
+                SUM(CASE WHEN Status = 'Open'      THEN 1 ELSE 0 END) AS [Open],
+                SUM(CASE WHEN Status = 'Escalated' THEN 1 ELSE 0 END) AS Escalated,
+                SUM(CASE WHEN Status = 'Closed'    THEN 1 ELSE 0 END) AS Closed
+            FROM Conversations c{filter}", p) ?? new ConversationCounts();
+
+        // Unread is a separate query: SQL Server forbids a subquery inside an aggregate (SUM),
+        // so it's a plain COUNT(*) with the EXISTS in the WHERE clause. Actionable = not Closed.
+        if (viewerUserId.HasValue)
+        {
+            counts.Unread = await conn.ExecuteScalarAsync<int>($@"
+                SELECT COUNT(*)
+                FROM Conversations c
+                LEFT JOIN ConversationViews cv ON cv.ConversationId = c.Id AND cv.UserId = @ViewerUserId
+                {filter} AND c.Status <> 'Closed'
+                  AND EXISTS (SELECT 1 FROM Messages mi
+                              WHERE mi.ConversationId = c.Id AND mi.Direction = 'inbound'
+                                AND mi.CreatedAt > ISNULL(cv.LastViewedAt, '1900-01-01'))", p);
+        }
+        return counts;
+    }
+
+    /// <summary>Total conversations per session (optionally scoped to one assigned user) — accurate, not page-limited.</summary>
+    public async Task<List<SessionConvCount>> GetCountsBySessionAsync(int? assignedUserId = null)
+    {
+        using var conn = _db.CreateConnection();
+        var sql = @"
+            SELECT SessionId, COUNT(*) AS [Count]
+            FROM Conversations
+            WHERE (@AssignedUserId IS NULL OR AssignedUserId = @AssignedUserId)
+            GROUP BY SessionId";
+        var rows = await conn.QueryAsync<SessionConvCount>(sql, new { AssignedUserId = assignedUserId });
+        return rows.ToList();
     }
 
     public async Task<int> CreateAsync(Conversation conversation)
@@ -145,6 +196,16 @@ public class ConversationRepository
         using var conn = _db.CreateConnection();
         var sql = "UPDATE Conversations SET LastMessageAt = GETUTCDATE() WHERE Id = @Id";
         await conn.ExecuteAsync(sql, new { Id = conversationId });
+    }
+
+    /// <summary>Raises priority only — never downgrades an already-High conversation.</summary>
+    public async Task<bool> UpdatePriorityAsync(int id, string priority)
+    {
+        using var conn = _db.CreateConnection();
+        var rows = await conn.ExecuteAsync(
+            "UPDATE Conversations SET Priority = @Priority WHERE Id = @Id AND Priority <> @Priority",
+            new { Id = id, Priority = priority });
+        return rows > 0;
     }
 
     public async Task<bool> UpdateAssignedUserAsync(int conversationId, int assignedUserId)
@@ -219,6 +280,22 @@ public class ConversationRepository
     }
 }
 
+// Status counts for the list filters (independent of paging)
+public class ConversationCounts
+{
+    public int Total { get; set; }
+    public int Open { get; set; }
+    public int Escalated { get; set; }
+    public int Closed { get; set; }
+    public int Unread { get; set; }
+}
+
+public class SessionConvCount
+{
+    public int SessionId { get; set; }
+    public int Count { get; set; }
+}
+
 // Flat projection for list view — avoids N+1 queries
 public class ConversationListRow
 {
@@ -241,4 +318,5 @@ public class ConversationListRow
     public string? TagsRaw { get; set; }     // "Name|Color;;Name2|Color2"
     public string? SummaryText { get; set; }
     public bool HasAiMessages { get; set; }
+    public bool IsUnread { get; set; }
 }

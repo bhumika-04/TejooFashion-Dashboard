@@ -1,4 +1,3 @@
-using Dapper;
 using TejooWhatsApp.Models.Entities;
 using TejooWhatsApp.Utilities;
 
@@ -45,8 +44,22 @@ public class WhatsAppSessionRepository
     public async Task<List<WhatsAppSessionWithUser>> GetAllWithUserAsync(bool? isActive = null, int? assignedUserId = null)
     {
         using var conn = _db.CreateConnection();
+        // "Messages today" is computed LIVE from the Messages table (IST day), not the stored
+        // WhatsAppSessions.MessagesToday counter — that counter is cumulative and never resets,
+        // so it would show an all-time total mislabelled as "today". This column is selected LAST
+        // so it overrides ws.MessagesToday in the row mapper.
         var sql = @"
-            SELECT ws.*, u.FullName AS AssignedUserName
+            SELECT ws.*, u.FullName AS AssignedUserName,
+                   (SELECT MAX(m.CreatedAt)
+                      FROM Messages m
+                      INNER JOIN Conversations c ON c.Id = m.ConversationId
+                      WHERE c.SessionId = ws.Id AND m.Direction = 'inbound') AS LastInboundAt,
+                   (SELECT COUNT(*)
+                      FROM Messages m
+                      INNER JOIN Conversations c ON c.Id = m.ConversationId
+                      WHERE c.SessionId = ws.Id
+                        AND CAST(DATEADD(MINUTE,330,m.CreatedAt) AS DATE)
+                          = CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE)) AS MessagesToday
             FROM WhatsAppSessions ws
             LEFT JOIN Users u ON ws.AssignedUserId = u.Id
             WHERE 1=1";
@@ -142,13 +155,15 @@ public class WhatsAppSessionRepository
         return await conn.QueryFirstOrDefaultAsync<WhatsAppSession>(sql, new { Provider = provider });
     }
 
-    public async Task IncrementMessagesTodayAsync(int sessionId)
+    // "Messages today" is computed live from the Messages table in GetAllWithUserAsync, so the stored
+    // WhatsAppSessions.MessagesToday counter is intentionally no longer maintained — it was cumulative,
+    // never reset, and mislabelled as "today". This just stamps the session's last-activity time.
+    public async Task TouchLastActiveAsync(int sessionId)
     {
         using var conn = _db.CreateConnection();
         var sql = @"
             UPDATE WhatsAppSessions
-            SET MessagesToday = MessagesToday + 1,
-                LastActiveAt = GETUTCDATE()
+            SET LastActiveAt = GETUTCDATE()
             WHERE Id = @Id";
         await conn.ExecuteAsync(sql, new { Id = sessionId });
     }
@@ -158,4 +173,5 @@ public class WhatsAppSessionRepository
 public class WhatsAppSessionWithUser : TejooWhatsApp.Models.Entities.WhatsAppSession
 {
     public string AssignedUserName { get; set; } = string.Empty;
+    public DateTime? LastInboundAt { get; set; }   // newest inbound message across this session's conversations
 }

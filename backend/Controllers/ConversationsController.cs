@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using TejooWhatsApp.Services;
 using TejooWhatsApp.Models.DTOs;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 
 namespace TejooWhatsApp.Controllers;
 
@@ -34,8 +37,63 @@ public class ConversationsController : ControllerBase
         [FromQuery] int limit = 100,
         [FromQuery] int offset = 0)
     {
-        var conversations = await _conversationService.GetAllConversationsAsync(status, assignedUserId, sessionId, limit, offset);
+        var conversations = await _conversationService.GetAllConversationsAsync(
+            status, ScopeAssignedUserId(assignedUserId), sessionId, limit, offset, CallerUserId());
         return Ok(conversations);
+    }
+
+    /// <summary>The authenticated user's id from the JWT (for per-user unread tracking).</summary>
+    private int? CallerUserId()
+    {
+        var idStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                 ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        return int.TryParse(idStr, out var id) ? id : null;
+    }
+
+    // POST /api/conversations/{id}/viewed — mark this conversation read for the current user
+    [HttpPost("{id:int}/viewed")]
+    public async Task<IActionResult> MarkViewed(int id)
+    {
+        var uid = CallerUserId();
+        if (uid is null) return Ok(new { success = false });
+        await _conversationService.MarkViewedAsync(id, uid.Value);
+        return Ok(new { success = true });
+    }
+
+    // Total / open / escalated counts for the current filter (independent of the 100-row page).
+    [HttpGet("count")]
+    public async Task<IActionResult> GetCount(
+        [FromQuery] int? assignedUserId = null,
+        [FromQuery] int? sessionId = null)
+    {
+        var counts = await _conversationService.GetCountsAsync(ScopeAssignedUserId(assignedUserId), sessionId, CallerUserId());
+        return Ok(counts);
+    }
+
+    // Total conversations per session (accurate, not page-limited) — for the session list badges.
+    [HttpGet("counts-by-session")]
+    public async Task<IActionResult> GetCountsBySession([FromQuery] int? assignedUserId = null)
+    {
+        var counts = await _conversationService.GetCountsBySessionAsync(ScopeAssignedUserId(assignedUserId));
+        return Ok(counts);
+    }
+
+    /// <summary>
+    /// Resolves the effective <c>assignedUserId</c> filter with server-side authorization.
+    /// CRR/Agent users are ALWAYS scoped to their own conversations, ignoring any client-supplied
+    /// value — so the "CRR sees only their own data" rule is enforced on the server, not just the UI.
+    /// (A CRR with a malformed token resolves to -1, which matches no rows, rather than seeing everything.)
+    /// </summary>
+    private int? ScopeAssignedUserId(int? requested)
+    {
+        var role = User.FindFirst(ClaimTypes.Role)?.Value ?? "";
+        var isScoped = role.Equals("CRR", StringComparison.OrdinalIgnoreCase)
+                    || role.Equals("Agent", StringComparison.OrdinalIgnoreCase);
+        if (!isScoped) return requested;
+
+        var idStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                 ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        return int.TryParse(idStr, out var id) ? id : -1;
     }
 
     [HttpGet("{id:int}")]
@@ -46,6 +104,16 @@ public class ConversationsController : ControllerBase
         {
             return NotFound(new { error = "Conversation not found" });
         }
+
+        // CRR/Agent may only open conversations assigned to them. Passing null makes this a no-op
+        // for Admin/HOD/Manager; for a scoped role it returns the caller's own id. Use 404 (not 403)
+        // so we don't reveal that a conversation with this id exists.
+        var scopedTo = ScopeAssignedUserId(null);
+        if (scopedTo.HasValue && (conversation.AssignedUser?.Id ?? 0) != scopedTo.Value)
+        {
+            return NotFound(new { error = "Conversation not found" });
+        }
+
         return Ok(conversation);
     }
 
@@ -75,10 +143,10 @@ public class ConversationsController : ControllerBase
         if (!isMedia && string.IsNullOrEmpty(request.Content))
             return BadRequest(new { error = "Message content is required" });
 
-        var result = await _orchestrator.SendManualMessageAsync(
+        var (ok, error) = await _orchestrator.SendManualMessageAsync(
             id, request.Content ?? "", request.MessageType, request.MediaUrl);
-        if (!result)
-            return BadRequest(new { error = "Failed to send message" });
+        if (!ok)
+            return BadRequest(new { error = error ?? "Failed to send message" });
 
         _logger.LogInformation("✓ Message sent: Conversation #{ConversationId}, Type: {MessageType}",
             id, request.MessageType ?? "text");
@@ -140,8 +208,10 @@ public class ConversationsController : ControllerBase
         await using var stream = System.IO.File.Create(filePath);
         await file.CopyToAsync(stream);
 
-        var baseUrl = $"{Request.Scheme}://{Request.Host}";
-        var fileUrl = $"{baseUrl}/uploads/conversations/{id}/{safeFileName}";
+        // Return a RELATIVE URL. The frontend resolves it against the backend origin for display,
+        // and WhatsAppOrchestrator.ToPublicMediaUrl prefixes PublicBaseUrl before sending to the BSP.
+        // (Storing an absolute localhost URL would only render on the backend machine.)
+        var fileUrl = $"/uploads/conversations/{id}/{safeFileName}";
 
         _logger.LogInformation("✓ Media uploaded for conversation #{Id}: {FileName} ({Type})",
             id, safeFileName, mediaType);
@@ -174,13 +244,32 @@ public class ConversationsController : ControllerBase
         return Ok(new { success = true });
     }
 
+    // Bulk close / assign / tag for a multi-selected set. CRR (whose mutating controls are hidden) excluded.
+    [Authorize(Roles = "Admin,HOD,Manager")]
+    [HttpPost("bulk")]
+    public async Task<IActionResult> BulkAction([FromBody] BulkActionRequest request)
+    {
+        if (request.Ids is null || request.Ids.Length == 0)
+            return BadRequest(new { error = "No conversations selected" });
+        if (request.Action is not ("close" or "assign" or "tag"))
+            return BadRequest(new { error = "Invalid action" });
+        if (request.Action == "assign" && (request.UserId is null or <= 0))
+            return BadRequest(new { error = "A user is required to assign" });
+        if (request.Action == "tag" && (request.TagId is null or <= 0))
+            return BadRequest(new { error = "A tag is required" });
+
+        var affected = await _conversationService.BulkActionAsync(request.Ids, request.Action, request.UserId, request.TagId);
+        _logger.LogInformation("✓ Bulk '{Action}' applied to {Count}/{Total} conversations", request.Action, affected, request.Ids.Length);
+        return Ok(new { success = true, affected });
+    }
+
     [HttpGet("search")]
     public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] int limit = 30, [FromQuery] int? assignedUserId = null)
     {
         if (string.IsNullOrWhiteSpace(q))
             return BadRequest(new { error = "Search query is required" });
 
-        var results = await _conversationService.SearchConversationsAsync(q, limit, assignedUserId);
+        var results = await _conversationService.SearchConversationsAsync(q, limit, ScopeAssignedUserId(assignedUserId));
         return Ok(results);
     }
 

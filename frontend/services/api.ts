@@ -60,11 +60,26 @@ export const dashboardApi = {
   getPerformance: (period: 'today' | 'week' | 'month' = 'today') =>
     apiClient.get(`/reports/performance?period=${period}`),
 
+  getPerformanceSummary: (period: 'today' | 'week' | 'month' = 'today') =>
+    apiClient.get(`/reports/performance-summary?period=${period}`),
+
   getHourlyDistribution: (days: number = 7) =>
     apiClient.get(`/reports/hourly-distribution?days=${days}`),
 
   getTopCustomers: (days: number = 7, top: number = 10) =>
     apiClient.get(`/reports/top-customers?days=${days}&top=${top}`),
+
+  getResponseSla: (days: number = 7, slaMinutes: number = 30) =>
+    apiClient.get(`/reports/response-sla?days=${days}&slaMinutes=${slaMinutes}`),
+
+  getTagDistribution: (type: 'conversation' | 'customer' = 'conversation', days: number = 7) =>
+    apiClient.get(`/reports/tag-distribution?type=${type}&days=${days}`),
+
+  getResolution: (days: number = 7) =>
+    apiClient.get(`/reports/resolution?days=${days}`),
+
+  getPeriodComparison: (days: number = 7) =>
+    apiClient.get(`/reports/period-comparison?days=${days}`),
 };
 
 export const settingsApi = {
@@ -98,6 +113,13 @@ export const conversationsApi = {
     return apiClient.get(`/conversations?${params}`);
   },
 
+  getCounts: (assignedUserId?: number, sessionId?: number) => {
+    const params = new URLSearchParams();
+    if (assignedUserId) params.append('assignedUserId', assignedUserId.toString());
+    if (sessionId) params.append('sessionId', sessionId.toString());
+    return apiClient.get(`/conversations/count?${params}`);
+  },
+
   getById: (id: number) =>
     apiClient.get(`/conversations/${id}`),
 
@@ -112,6 +134,15 @@ export const conversationsApi = {
     });
   },
 
+  markViewed: (id: number) =>
+    apiClient.post(`/conversations/${id}/viewed`),
+
+  getCountsBySession: (assignedUserId?: number) => {
+    const params = new URLSearchParams();
+    if (assignedUserId) params.append('assignedUserId', String(assignedUserId));
+    return apiClient.get(`/conversations/counts-by-session?${params}`);
+  },
+
   updateStatus: (id: number, status: string) =>
     apiClient.put(`/conversations/${id}/status`, { status }),
 
@@ -120,6 +151,9 @@ export const conversationsApi = {
 
   assign: (id: number, assignedUserId: number) =>
     apiClient.put(`/conversations/${id}/assign`, { assignedUserId }),
+
+  bulkAction: (ids: number[], action: 'close' | 'assign' | 'tag', opts: { userId?: number; tagId?: number } = {}) =>
+    apiClient.post('/conversations/bulk', { ids, action, userId: opts.userId, tagId: opts.tagId }),
 
   search: (q: string, limit: number = 30, assignedUserId?: number) => {
     const params = new URLSearchParams({ q, limit: limit.toString() });
@@ -149,6 +183,10 @@ export const escalationsApi = {
 
   create: (data: any) =>
     apiClient.post('/escalations', data),
+
+  // Escalate a whole conversation — server auto-picks the next-level user and starts the matrix.
+  escalateConversation: (conversationId: number) =>
+    apiClient.post(`/escalations/conversation/${conversationId}`),
 
   resolve: (id: number, resolutionNotes?: string) =>
     apiClient.post(`/escalations/${id}/resolve`, { resolutionNotes }),
@@ -276,6 +314,10 @@ export const aiPromptsApi = {
 
   toggle: (id: number, isActive: boolean) =>
     apiClient.post(`/aiprompts/${id}/toggle`, { isActive }),
+
+  // Dry-run the AI pipeline for a message — returns intent/reply/decision, sends nothing.
+  test: (message: string, conversationId?: number) =>
+    apiClient.post('/aiprompts/test', { message, conversationId }),
 };
 
 export const quickRepliesApi = {
@@ -311,9 +353,10 @@ export const rolePermissionsApi = {
 };
 
 export const customersApi = {
-  getAll: (search?: string, page = 1, pageSize = 50) => {
+  getAll: (search?: string, page = 1, pageSize = 50, tagId?: number) => {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (search) params.append('search', search);
+    if (tagId) params.append('tagId', String(tagId));
     return apiClient.get(`/customers?${params}`);
   },
   getById: (id: number) => apiClient.get(`/customers/${id}`),
@@ -325,6 +368,8 @@ export const customersApi = {
   getTags:    (id: number) => apiClient.get(`/customers/${id}/tags`),
   addTag:     (id: number, tagId: number) => apiClient.post(`/customers/${id}/tags/${tagId}`),
   removeTag:  (id: number, tagId: number) => apiClient.delete(`/customers/${id}/tags/${tagId}`),
+  bulkTag:    (customerIds: number[], tagId: number, action: 'add' | 'remove') =>
+    apiClient.post('/customers/bulk-tag', { customerIds, tagId, action }),
 };
 
 export const tagsApi = {
@@ -374,6 +419,12 @@ export const searchApi = {
     apiClient.get(`/search?q=${encodeURIComponent(q)}&limit=${limit}`),
 };
 
+export const systemApi = {
+  getQueueHealth: () => apiClient.get('/system/queue-health'),
+  retryJob:   (id: number) => apiClient.post(`/system/queue/${id}/retry`),
+  discardJob: (id: number) => apiClient.post(`/system/queue/${id}/discard`),
+};
+
 export const webhookLogsApi = {
   getAll: (params: { page?: number; pageSize?: number; provider?: string; success?: boolean } = {}) => {
     const p = new URLSearchParams();
@@ -414,4 +465,10 @@ export const notificationsApi = {
   // Get all unread conversations for a user
   getUnreadConversations: (userId: number) =>
     apiClient.get(`/notifications/user/${userId}/unread-conversations`),
+};
+
+// ── Media gallery ──
+export const galleryApi = {
+  get: (type: string = 'image', page: number = 1, pageSize: number = 30) =>
+    apiClient.get(`/gallery?type=${type}&page=${page}&pageSize=${pageSize}`),
 };

@@ -1,14 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Card, CardContent } from '@/components/ui/card';
 import { sessionsApi, usersApi } from '@/services/api';
-import { Phone, Edit, Trash2, CheckCircle, XCircle, Activity, MessageSquare, ArrowUp, Clock, ArrowDown, Search, SlidersHorizontal, Download, Send, X, UserCheck, Copy } from 'lucide-react';
+import { Phone, Edit, Trash2, CheckCircle, XCircle, Activity, MessageSquare, ArrowUp, Clock, ArrowDown, Search, SlidersHorizontal, Download, Send, X, UserCheck, Copy, AlertTriangle } from 'lucide-react';
 import { SessionModal, SessionFormData } from '@/components/modals/SessionModal';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { KPICard } from '@/components/ui/kpi-card';
 import { FAB } from '@/components/ui/fab';
+import { parseUTCDate } from '@/lib/utils';
 
 export default function SessionsPage() {
   const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } })();
@@ -349,6 +351,28 @@ export default function SessionsPage() {
                   <span className="font-semibold text-gray-900">{session.messagesToday || 0}</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-gray-50">
+                  <span className="text-gray-400 font-medium">Last inbound</span>
+                  {(() => {
+                    const d = parseUTCDate(session.lastInboundAt);  // stored UTC — parse as UTC, not local
+                    const t = d ? d.getTime() : 0;
+                    if (!t) return <span className="text-xs font-semibold text-gray-400">No inbound yet</span>;
+                    const mins = Math.floor((Date.now() - t) / 60000);
+                    const rel = mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`;
+                    const stale = mins >= 1440; // no inbound in 24h+ → likely webhook/connection issue
+                    return (
+                      <span
+                        title={`Last inbound message: ${new Date(t).toLocaleString()}`}
+                        className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          stale ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'
+                        }`}
+                      >
+                        {stale && <AlertTriangle className="h-3 w-3" />}
+                        {stale ? `Stale · ${rel}` : rel}
+                      </span>
+                    );
+                  })()}
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-gray-50">
                   <span className="text-gray-400 font-medium">AI Auto Reply</span>
                   {!isCRR ? (
                     <button
@@ -440,8 +464,8 @@ export default function SessionsPage() {
       )}
 
       {/* Test Message Modal */}
-      {testSession && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setTestSession(null)}>
+      {testSession && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4" onClick={() => setTestSession(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <div>
@@ -477,7 +501,8 @@ export default function SessionsPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Session Modal */}

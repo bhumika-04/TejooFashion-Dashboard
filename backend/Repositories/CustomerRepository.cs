@@ -1,4 +1,3 @@
-using Dapper;
 using TejooWhatsApp.Utilities;
 
 namespace TejooWhatsApp.Repositories;
@@ -14,6 +13,9 @@ public class Customer
     public DateTime? LastSeenAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public string? TagsRaw { get; set; }       // customer tags "Name|Color;;…" — populated by GetPagedAsync only
+    public string? ConvTagsRaw { get; set; }   // distinct conversation tags across this customer's conversations
+    public string? LastStatus { get; set; }    // status of the customer's most recent conversation
 }
 
 public class CustomerStats
@@ -42,21 +44,42 @@ public class CustomerRepository
         return await conn.QueryAsync<Customer>(sql, new { Search = search });
     }
 
-    public async Task<(IEnumerable<Customer> Customers, int Total)> GetPagedAsync(string? search, int page, int pageSize)
+    public async Task<(IEnumerable<Customer> Customers, int Total)> GetPagedAsync(string? search, int page, int pageSize, int? tagId = null, int? assignedUserId = null)
     {
         using var conn = _db.CreateConnection();
-        var where = string.IsNullOrEmpty(search)
-            ? ""
-            : "WHERE Phone LIKE '%' + @Search + '%' OR Name LIKE '%' + @Search + '%' OR Email LIKE '%' + @Search + '%'";
+        var conditions = new List<string>();
+        if (!string.IsNullOrEmpty(search))
+            conditions.Add("(c.Phone LIKE '%' + @Search + '%' OR c.Name LIKE '%' + @Search + '%' OR c.Email LIKE '%' + @Search + '%')");
+        if (tagId.HasValue)
+            conditions.Add("EXISTS (SELECT 1 FROM CustomerTags ct WHERE ct.CustomerId = c.Id AND ct.TagId = @TagId)");
+        // CRR/agent scoping: only customers who have a conversation assigned to this user.
+        if (assignedUserId.HasValue)
+            conditions.Add("EXISTS (SELECT 1 FROM Conversations cv WHERE cv.CustomerPhone = c.Phone AND cv.AssignedUserId = @AssignedUserId)");
+        var where = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
 
         var total = await conn.ExecuteScalarAsync<int>(
-            $"SELECT COUNT(*) FROM Customers {where}", new { Search = search });
+            $"SELECT COUNT(*) FROM Customers c {where}", new { Search = search, TagId = tagId, AssignedUserId = assignedUserId });
 
         var customers = await conn.QueryAsync<Customer>($"""
-            SELECT * FROM Customers {where}
-            ORDER BY LastSeenAt DESC
+            SELECT c.*,
+                   (SELECT STRING_AGG(t.Name + '|' + t.Color, ';;')
+                    FROM CustomerTags ct JOIN Tags t ON t.Id = ct.TagId
+                    WHERE ct.CustomerId = c.Id) AS TagsRaw,
+                   (SELECT STRING_AGG(x.NameColor, ';;')
+                    FROM (SELECT DISTINCT t.Name + '|' + t.Color AS NameColor
+                          FROM Conversations cv
+                          JOIN ConversationTags cvt ON cvt.ConversationId = cv.Id
+                          JOIN Tags t ON t.Id = cvt.TagId
+                          WHERE cv.CustomerPhone = c.Phone) x) AS ConvTagsRaw,
+                   (SELECT TOP 1 cv.Status
+                    FROM Conversations cv
+                    WHERE cv.CustomerPhone = c.Phone
+                    ORDER BY CASE WHEN cv.LastMessageAt IS NULL THEN 1 ELSE 0 END,
+                             cv.LastMessageAt DESC, cv.CreatedAt DESC) AS LastStatus
+            FROM Customers c {where}
+            ORDER BY c.LastSeenAt DESC
             OFFSET {(page - 1) * pageSize} ROWS FETCH NEXT {pageSize} ROWS ONLY
-            """, new { Search = search });
+            """, new { Search = search, TagId = tagId, AssignedUserId = assignedUserId });
 
         return (customers, total);
     }
@@ -122,17 +145,21 @@ public class CustomerRepository
         }
     }
 
-    public async Task<CustomerStats> GetStatsAsync()
+    public async Task<CustomerStats> GetStatsAsync(int? assignedUserId = null)
     {
         using var conn = _db.CreateConnection();
-        return await conn.QueryFirstAsync<CustomerStats>("""
+        // CRR/agent scoping: restrict the aggregate to customers with a conversation assigned to this user.
+        var scope = assignedUserId.HasValue
+            ? "WHERE EXISTS (SELECT 1 FROM Conversations cv WHERE cv.CustomerPhone = c.Phone AND cv.AssignedUserId = @AssignedUserId)"
+            : "";
+        return await conn.QueryFirstAsync<CustomerStats>($"""
             SELECT
                 COUNT(*)                                                          AS Total,
                 SUM(CASE WHEN LastSeenAt >= DATEADD(day,-7, GETUTCDATE()) THEN 1 ELSE 0 END) AS ActiveThisWeek,
-                SUM(CASE WHEN CAST(LastSeenAt AS date) = CAST(GETUTCDATE() AS date) THEN 1 ELSE 0 END) AS SeenToday,
+                SUM(CASE WHEN CAST(DATEADD(MINUTE,330,LastSeenAt) AS date) = CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS date) THEN 1 ELSE 0 END) AS SeenToday,
                 SUM(CASE WHEN CreatedAt >= DATEADD(day,-7, GETUTCDATE()) THEN 1 ELSE 0 END) AS NewThisWeek
-            FROM Customers
-            """);
+            FROM Customers c {scope}
+            """, new { AssignedUserId = assignedUserId });
     }
 
     public async Task RefreshStatsAsync(string phone)

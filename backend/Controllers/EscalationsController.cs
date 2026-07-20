@@ -59,6 +59,25 @@ public class EscalationsController : ControllerBase
         return Ok(new { success = true, escalationId = escalation.Id });
     }
 
+    // Escalate a conversation into a REAL escalation record — engages the CRR→Manager→HOD timeout matrix.
+    // Auto-picks the next person up the chain from whoever the conversation is assigned to.
+    [HttpPost("conversation/{conversationId}")]
+    public async Task<IActionResult> EscalateConversation(int conversationId, [FromQuery] string? reason = null, [FromQuery] string priority = "Normal")
+    {
+        var (callerId, callerName) = GetCaller();
+        var (escalation, targetName, error) = await _escalationService.EscalateConversationAsync(
+            conversationId, callerId > 0 ? callerId : (int?)null, reason, priority);
+
+        if (escalation == null)
+            return BadRequest(new { error = error ?? "Failed to escalate" });
+
+        await _auditRepo.LogAsync("escalation.create", callerId, callerName, "Escalation", escalation.Id,
+            null, $"{{\"conversationId\":{conversationId},\"escalatedTo\":\"{targetName}\",\"level\":{escalation.EscalationLevel}}}",
+            HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(new { success = true, escalationId = escalation.Id, escalatedTo = targetName, level = escalation.EscalationLevel });
+    }
+
     [HttpPost("{id}/resolve")]
     public async Task<IActionResult> Resolve(int id, [FromBody] UpdateEscalationRequest request)
     {

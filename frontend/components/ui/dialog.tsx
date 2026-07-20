@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -23,9 +24,12 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
   }, [open]);
 
   if (!isVisible && !open) return null;
+  if (typeof document === 'undefined') return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+  // Portaled to <body> so the overlay always sits above the app header/chrome
+  // (the header has its own stacking layer; an in-page modal would render under it).
+  return createPortal(
+    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
       {/* Backdrop with fade animation */}
       <div
         className={cn(
@@ -38,13 +42,14 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
       {/* Dialog content with scale animation */}
       <div
         className={cn(
-          'relative z-50 w-full max-w-lg transform transition-all duration-200',
+          'relative z-[151] w-full max-w-lg transform transition-all duration-200',
           open ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

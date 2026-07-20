@@ -61,10 +61,52 @@ public class ReportsController : ControllerBase
         return Ok(stats);
     }
 
+    // Team KPI trends: current window vs equal-length previous window (real deltas, no hardcoding).
+    [HttpGet("performance-summary")]
+    public async Task<IActionResult> GetPerformanceSummary([FromQuery] string period = "today")
+    {
+        var days = period switch { "week" => 7, "month" => 30, _ => 1 };
+        var data = await _reportRepo.GetPerformanceComparisonAsync(days);
+        return Ok(data);
+    }
+
     [HttpGet("hourly-distribution")]
     public async Task<IActionResult> GetHourlyDistribution([FromQuery] int days = 7)
     {
         var data = await _reportRepo.GetHourlyDistributionAsync(days);
+        return Ok(data);
+    }
+
+    // First-response-time SLA: overall + per-agent breach breakdown
+    [HttpGet("response-sla")]
+    public async Task<IActionResult> GetResponseSla([FromQuery] int days = 7, [FromQuery] int slaMinutes = 30)
+    {
+        var data = await _reportRepo.GetResponseSlaAsync(days, slaMinutes);
+        return Ok(data);
+    }
+
+    // Current vs previous window comparison for headline KPIs
+    [HttpGet("period-comparison")]
+    public async Task<IActionResult> GetPeriodComparison([FromQuery] int days = 7)
+    {
+        var data = await _reportRepo.GetPeriodComparisonAsync(days);
+        return Ok(data);
+    }
+
+    // Resolution + escalation analytics over the period
+    [HttpGet("resolution")]
+    public async Task<IActionResult> GetResolution([FromQuery] int days = 7)
+    {
+        var data = await _reportRepo.GetResolutionStatsAsync(days);
+        return Ok(data);
+    }
+
+    // Tag distribution over the period — type=conversation|customer
+    [HttpGet("tag-distribution")]
+    public async Task<IActionResult> GetTagDistribution([FromQuery] string type = "conversation", [FromQuery] int days = 7)
+    {
+        var t = type?.ToLowerInvariant() == "customer" ? "customer" : "conversation";
+        var data = await _reportRepo.GetTagDistributionAsync(t, days);
         return Ok(data);
     }
 

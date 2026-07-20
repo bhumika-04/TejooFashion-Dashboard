@@ -1,4 +1,3 @@
-using Dapper;
 using TejooWhatsApp.Models.Entities;
 using TejooWhatsApp.Utilities;
 
@@ -28,6 +27,34 @@ public class MessageRepository
             "SELECT COUNT(1) FROM Messages WHERE ProviderMessageId = @Id",
             new { Id = providerMessageId });
         return count > 0;
+    }
+
+    /// <summary>
+    /// Paged media gallery — messages of a given type (e.g. 'image') that carry a media URL,
+    /// newest first, with customer context. Scoped to a user's own conversations when assignedUserId is set.
+    /// </summary>
+    public async Task<(List<GalleryItem> Items, int Total)> GetMediaAsync(
+        string messageType, int page, int pageSize, int? assignedUserId)
+    {
+        using var conn = _db.CreateConnection();
+        var where = @"
+            FROM Messages m
+            JOIN Conversations c ON c.Id = m.ConversationId
+            WHERE m.MessageType = @MessageType
+              AND m.MediaUrl IS NOT NULL AND m.MediaUrl <> ''
+              AND (@AssignedUserId IS NULL OR c.AssignedUserId = @AssignedUserId)";
+        var p = new { MessageType = messageType, AssignedUserId = assignedUserId };
+
+        var total = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(*) {where}", p);
+
+        var items = await conn.QueryAsync<GalleryItem>($@"
+            SELECT m.Id, m.MediaUrl, m.MessageType, m.Direction, m.Content, m.CreatedAt,
+                   m.ConversationId, c.CustomerName, c.CustomerPhone
+            {where}
+            ORDER BY m.CreatedAt DESC
+            OFFSET {(page - 1) * pageSize} ROWS FETCH NEXT {pageSize} ROWS ONLY", p);
+
+        return (items.ToList(), total);
     }
 
     public async Task<List<Message>> GetByConversationIdAsync(int conversationId, int limit = 50)
@@ -106,7 +133,7 @@ public class MessageRepository
         using var conn = _db.CreateConnection();
         var sql = @"
             SELECT COUNT(*) FROM Messages
-            WHERE CAST(CreatedAt AS DATE) = CAST(GETUTCDATE() AS DATE)";
+            WHERE CAST(DATEADD(MINUTE, 330, CreatedAt) AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE)";
         return await conn.ExecuteScalarAsync<int>(sql);
     }
 
@@ -115,7 +142,7 @@ public class MessageRepository
         using var conn = _db.CreateConnection();
         var sql = @"
             SELECT COUNT(*) FROM Messages
-            WHERE CAST(CreatedAt AS DATE) = CAST(GETUTCDATE() AS DATE)
+            WHERE CAST(DATEADD(MINUTE, 330, CreatedAt) AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE)
             AND Direction = @Direction";
         return await conn.ExecuteScalarAsync<int>(sql, new { Direction = direction });
     }
@@ -125,8 +152,22 @@ public class MessageRepository
         using var conn = _db.CreateConnection();
         var sql = @"
             SELECT COUNT(*) FROM Messages
-            WHERE CAST(CreatedAt AS DATE) = CAST(GETUTCDATE() AS DATE)
+            WHERE CAST(DATEADD(MINUTE, 330, CreatedAt) AS DATE) = CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE)
             AND IsAiGenerated = 1";
         return await conn.ExecuteScalarAsync<int>(sql);
     }
+}
+
+/// <summary>Flat row for the media gallery (message media + customer context).</summary>
+public class GalleryItem
+{
+    public int Id { get; set; }
+    public string? MediaUrl { get; set; }
+    public string MessageType { get; set; } = "";
+    public string Direction { get; set; } = "";
+    public string? Content { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public int ConversationId { get; set; }
+    public string? CustomerName { get; set; }
+    public string? CustomerPhone { get; set; }
 }

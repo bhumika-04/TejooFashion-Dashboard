@@ -81,7 +81,16 @@ public class NotificationService
     // Send notification to a specific user (real-time push + DB persistence)
     public async Task SendToUserAsync(int userId, NotificationMessage notification)
     {
-        // Persist so the notification bell shows missed notifications after refresh/login
+        await PersistAsync(userId, notification);   // bell survives refresh/login
+        await _hubContext.Clients.Group($"user_{userId}").SendAsync("ReceiveNotification", notification);
+        _logger.LogInformation("✓ Notification sent to user {UserId}: {Type}", userId, notification.Type);
+    }
+
+    // Writes the durable Notifications row only (no real-time push). Kept separate so supervisors can
+    // get a LIVE ping without persisting a row per message — persisting to every supervisor on every
+    // message is what previously bloated the Notifications table to ~175k rows.
+    private async Task PersistAsync(int userId, NotificationMessage notification)
+    {
         await _notificationRepo.CreateAsync(new Notification
         {
             UserId = userId,
@@ -92,10 +101,11 @@ public class NotificationService
             EscalationId = notification.EscalationId,
             Priority = notification.Priority,
         });
-
-        await _hubContext.Clients.Group($"user_{userId}").SendAsync("ReceiveNotification", notification);
-        _logger.LogInformation("✓ Notification sent to user {UserId}: {Type}", userId, notification.Type);
     }
+
+    // Real-time push to one user's group WITHOUT persisting (ephemeral live signal).
+    private Task PushLiveToUserAsync(int userId, NotificationMessage notification) =>
+        _hubContext.Clients.Group($"user_{userId}").SendAsync("ReceiveNotification", notification);
 
     // Send notification to all users in a team
     public async Task SendToTeamAsync(int teamId, NotificationMessage notification)
@@ -104,28 +114,8 @@ public class NotificationService
         _logger.LogInformation("✓ Notification sent to team {TeamId}: {Type}", teamId, notification.Type);
     }
 
-    // Send notification to all active users (real-time + DB persisted per user)
-    public async Task SendToAllAsync(NotificationMessage notification)
-    {
-        await _hubContext.Clients.All.SendAsync("ReceiveNotification", notification);
-        // Persist for every active user so they see it after refresh/login
-        var activeUsers = await _userRepo.GetAllAsync(isActive: true);
-        foreach (var user in activeUsers)
-        {
-            await _notificationRepo.CreateAsync(new Notification
-            {
-                UserId      = user.Id,
-                Type        = notification.Type,
-                Title       = notification.Title,
-                Message     = notification.Message,
-                ConversationId = notification.ConversationId,
-                Priority    = notification.Priority,
-            });
-        }
-        _logger.LogInformation("✓ Notification broadcast to {Count} active users: {Type}", activeUsers.Count, notification.Type);
-    }
-
-    // Notify about new message — persisted to assigned user + Admins/Managers + real-time to anyone viewing
+    // New message on an ASSIGNED conversation. Persists ONE row (to the assigned user, who must act);
+    // supervisors and conversation viewers get a live real-time ping but no persisted row per message.
     public async Task NotifyNewMessageAsync(int userId, int conversationId, string customerPhone, string customerName, string messagePreview)
     {
         var notification = new NotificationMessage
@@ -138,20 +128,45 @@ public class NotificationService
             CustomerName = customerName
         };
 
-        // Persist + push to the assigned user
+        // Persist + push to the assigned user — the only durable notification.
         await SendToUserAsync(userId, notification);
 
-        // Also persist + push to all Admin/HOD/Manager users so they always see activity
-        // (skip if the assigned user is already an admin role to avoid duplicate)
+        // Supervisors (Admin/HOD/Manager) get a LIVE ping for visibility, but NOT a stored row.
         var supervisors = await _userRepo.GetAllAsync(isActive: true);
         foreach (var sup in supervisors.Where(u => u.Id != userId &&
             (u.Role == "Admin" || u.Role == "HOD" || u.Role == "Manager")))
         {
-            await SendToUserAsync(sup.Id, notification);
+            await PushLiveToUserAsync(sup.Id, notification);
         }
 
-        // Also push to anyone currently viewing this conversation (regardless of assignment)
+        // Anyone currently viewing this conversation (ephemeral).
         await _hubContext.Clients.Group($"conv_{conversationId}").SendAsync("ReceiveNotification", notification);
+    }
+
+    // New message on an UNASSIGNED conversation. Live-pushes to everyone, but persists only to Admins
+    // so an unattended conversation still has a durable, owner-visible record — without writing a row
+    // for all ~37 users on every inbound message.
+    public async Task NotifyUnassignedMessageAsync(int conversationId, string customerPhone, string customerName, string messagePreview)
+    {
+        var notification = new NotificationMessage
+        {
+            Type = "new_message",
+            Title = "New unassigned message",
+            Message = $"Unassigned message from {customerName ?? customerPhone}: {messagePreview}",
+            ConversationId = conversationId,
+            CustomerPhone = customerPhone,
+            CustomerName = customerName
+        };
+
+        // Live push to everyone connected (ephemeral).
+        await _hubContext.Clients.All.SendAsync("ReceiveNotification", notification);
+
+        // Persist only to Admins so it isn't lost.
+        var admins = await _userRepo.GetAllAsync(isActive: true);
+        foreach (var admin in admins.Where(u => u.Role == "Admin"))
+            await PersistAsync(admin.Id, notification);
+
+        _logger.LogInformation("✓ Unassigned-message notification (live broadcast, persisted to Admins) — conv {Conv}", conversationId);
     }
 
     // Notify about escalation

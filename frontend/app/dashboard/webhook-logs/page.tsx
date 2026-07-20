@@ -62,7 +62,7 @@ export default function WebhookLogsPage() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white border-b border-gray-100 px-6 py-3 flex flex-wrap gap-3 items-end">
+      <div className="bg-white border-b border-gray-100 px-3 sm:px-6 py-3 flex flex-wrap gap-3 items-end">
         <div>
           <label className="text-xs text-gray-500 block mb-1">Provider</label>
           <input
@@ -92,9 +92,9 @@ export default function WebhookLogsPage() {
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-auto p-6">
-        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-          <table className="w-full text-sm">
+      <div className="flex-1 overflow-auto p-3 sm:p-6">
+        <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-8"></th>

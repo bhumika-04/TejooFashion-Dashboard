@@ -30,12 +30,17 @@ public class EscalationService
         _logger = logger;
     }
 
+    /// <summary>Maps a user's role to the matching escalation-ladder rung (CRR=1, Manager=2, HOD=3),
+    /// so escalations created for a given person start the timeout matrix at the correct level.</summary>
+    public static int LevelForRole(string? role) => role switch { "HOD" => 3, "Manager" => 2, _ => 1 };
+
     public async Task<Escalation> CreateEscalationAsync(
         int conversationId,
         int escalatedToUserId,
         int? escalatedFromUserId = null,
         string? reason = null,
-        string priority = "Normal")
+        string priority = "Normal",
+        int escalationLevel = 1)
     {
         var escalation = new Escalation
         {
@@ -45,7 +50,9 @@ public class EscalationService
             Reason = reason,
             Priority = priority,
             Status = "Pending",
-            EscalatedAt = DateTime.UtcNow
+            EscalatedAt = DateTime.UtcNow,
+            LastEscalatedAt = DateTime.UtcNow,   // starts the timeout clock for the matrix
+            EscalationLevel = escalationLevel
         };
 
         escalation.Id = await _escalationRepo.CreateAsync(escalation);
@@ -72,6 +79,41 @@ public class EscalationService
         }
 
         return escalation;
+    }
+
+    /// <summary>
+    /// Manually escalate a conversation from the dashboard: picks the next person up the chain from
+    /// whoever it's currently assigned to, creates a real escalation record (starting at the rung that
+    /// matches that person's role so the timeout matrix bumps correctly), and marks it Escalated.
+    /// </summary>
+    public async Task<(Escalation? Escalation, string? TargetName, string? Error)> EscalateConversationAsync(
+        int conversationId, int? escalatedFromUserId, string? reason, string priority = "Normal")
+    {
+        var conversation = await _conversationRepo.GetByIdAsync(conversationId);
+        if (conversation == null) return (null, null, "Conversation not found");
+
+        // Don't stack duplicate escalations on the same conversation.
+        var existing = await _escalationRepo.GetActiveEscalationAsync(conversationId);
+        if (existing != null)
+            return (null, null, "This conversation already has an active escalation.");
+
+        var currentUserId = conversation.AssignedUserId;
+        var nextUser = await GetNextEscalationUserAsync(currentUserId);
+        if (nextUser == null)
+            return (null, null, "No escalation target available — add a manager/HOD or assign the conversation first.");
+
+        // Start at the ladder rung matching the target's role so the timeout service bumps correctly.
+        var level = LevelForRole(nextUser.Role);
+
+        var escalation = await CreateEscalationAsync(
+            conversationId,
+            nextUser.Id,
+            escalatedFromUserId: currentUserId > 0 ? currentUserId : escalatedFromUserId,
+            reason: string.IsNullOrWhiteSpace(reason) ? "Manually escalated by agent" : reason,
+            priority: priority,
+            escalationLevel: level);
+
+        return (escalation, nextUser.FullName, null);
     }
 
     public async Task<bool> ResolveEscalationAsync(int escalationId, string? resolutionNotes = null)

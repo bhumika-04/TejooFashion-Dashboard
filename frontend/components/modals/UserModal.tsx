@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFoo
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Eye, EyeOff } from 'lucide-react';
 
 interface UserModalProps {
   open: boolean;
@@ -23,6 +24,7 @@ export interface UserFormData {
 
 export function UserModal({ open, onOpenChange, onSubmit, user }: UserModalProps) {
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState<UserFormData>({
     fullName: '',
     email: '',
@@ -32,6 +34,7 @@ export function UserModal({ open, onOpenChange, onSubmit, user }: UserModalProps
   });
 
   useEffect(() => {
+    setShowPassword(false);
     if (user) {
       setFormData({
         fullName: user.fullName || '',
@@ -109,14 +112,26 @@ export function UserModal({ open, onOpenChange, onSubmit, user }: UserModalProps
                   Password {!user && <span className="text-red-500">*</span>}
                   {user && <span className="text-gray-500 text-xs">(Leave empty to keep current)</span>}
                 </label>
-                <Input
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder={user ? 'Enter new password to change' : 'Enter password'}
-                  required={!user}
-                  disabled={loading}
-                />
+                <div className="relative">
+                  <Input
+                    type={showPassword ? 'text' : 'password'}
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    placeholder={user ? 'Enter new password to change' : 'Enter password'}
+                    required={!user}
+                    disabled={loading}
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    disabled={loading}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 disabled:opacity-50"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
 
               {/* Role */}

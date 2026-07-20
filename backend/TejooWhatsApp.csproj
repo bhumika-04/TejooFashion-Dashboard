@@ -1,30 +1,37 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Dapper for database access -->
-    <PackageReference Include="Dapper" Version="2.1.28" />
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.1.5" />
+    <!-- Raw ADO.NET data access -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.1" />
+
+    <!-- DbUp: runs SQL migration scripts on startup -->
+    <PackageReference Include="dbup-sqlserver" Version="6.0.16" />
 
     <!-- Authentication -->
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.2" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.15.0" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
 
     <!-- API Documentation -->
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.6" />
 
     <!-- JSON Handling -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="8.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="10.0.2" />
+  </ItemGroup>
 
-    <!-- Real-time Notifications -->
-    <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.1.0" />
+  <!-- Bundle the SQL migration scripts into the assembly so DbUp can run them on startup -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\database\migrations\*.sql">
+      <Link>Migrations\%(Filename)%(Extension)</Link>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

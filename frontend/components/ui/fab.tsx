@@ -16,7 +16,8 @@ export function FAB({ onClick, icon: Icon, label, className }: FABProps) {
       onClick={onClick}
       title={label}
       className={cn(
-        'fixed bottom-6 right-6 z-40',
+        // sits above the mobile bottom nav on small screens, bottom-right on desktop
+        'fixed bottom-20 right-5 lg:bottom-6 lg:right-6 z-40',
         'h-14 w-14 rounded-full bg-slate-800 text-white',
         'flex items-center justify-center',
         'hover:bg-slate-700 hover:scale-110 active:scale-95',

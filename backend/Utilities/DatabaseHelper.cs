@@ -1,5 +1,4 @@
 using Microsoft.Data.SqlClient;
-using System.Data;
 
 namespace TejooWhatsApp.Utilities;
 
@@ -13,7 +12,11 @@ public class DatabaseHelper
             ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
     }
 
-    public IDbConnection CreateConnection()
+    /// <summary>
+    /// Creates a new (closed) SqlConnection. The Db extension helpers open it lazily.
+    /// Returns the concrete type so the ADO.NET extension methods bind correctly.
+    /// </summary>
+    public SqlConnection CreateConnection()
     {
         return new SqlConnection(_connectionString);
     }

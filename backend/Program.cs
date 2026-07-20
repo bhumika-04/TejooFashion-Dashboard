@@ -127,7 +127,6 @@ builder.Services.AddScoped<EscalationService>();
 builder.Services.AddScoped<EscalationRuleService>();
 builder.Services.AddScoped<WhatsAppOrchestrator>();
 builder.Services.AddScoped<NotificationService>();
-builder.Services.AddScoped<MediaStorageService>();
 
 // SQL-backed message queue — Singleton; DatabaseHelper + ILogger injected automatically
 builder.Services.AddSingleton<MessageQueueService>();
@@ -135,6 +134,7 @@ builder.Services.AddHostedService<MediaCleanupService>();
 builder.Services.AddHostedService<MessageProcessorService>();
 builder.Services.AddHostedService<ConversationAutoCloseService>();
 builder.Services.AddHostedService<EscalationTimeoutService>();
+builder.Services.AddHostedService<ConversationSummaryService>();
 
 // Register AI Services
 builder.Services.AddScoped<OpenAiClient>();
@@ -145,6 +145,26 @@ builder.Services.AddScoped<AiRouterService>();
 builder.Services.AddScoped<AppLogger>();
 
 var app = builder.Build();
+
+var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+
+// Run database migrations via DbUp on startup (idempotent; controlled by config flag, default on)
+if (builder.Configuration.GetValue("Database:RunMigrationsOnStartup", true))
+{
+    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+        ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+    DbMigrator.Run(connectionString, startupLogger);
+}
+
+// Surface the public base URL on startup so operators can confirm it matches the current
+// ngrok tunnel (free ngrok URLs rotate on every restart). Used for outbound media + webhooks.
+var publicBaseUrl = builder.Configuration["ExternalApis:PublicBaseUrl"];
+if (string.IsNullOrWhiteSpace(publicBaseUrl))
+    startupLogger.LogWarning("ExternalApis:PublicBaseUrl is NOT set — agent-sent media (images/files) cannot be delivered to WhatsApp until this points to a public URL.");
+else if (publicBaseUrl.Contains("localhost", StringComparison.OrdinalIgnoreCase) || publicBaseUrl.Contains("127.0.0.1"))
+    startupLogger.LogWarning("ExternalApis:PublicBaseUrl is '{Url}' (local) — the BSP cannot reach it; outbound media will fail. Set it to your ngrok/public URL.", publicBaseUrl);
+else
+    startupLogger.LogInformation("ExternalApis:PublicBaseUrl = {Url}  (outbound media + webhooks). Update this whenever the ngrok tunnel changes.", publicBaseUrl);
 
 // Add concise request logging middleware
 app.Use(async (context, next) =>

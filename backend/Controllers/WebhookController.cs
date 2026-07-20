@@ -77,6 +77,15 @@ public class WebhookController : ControllerBase
                 return BadRequest("Invalid payload - deserialization failed");
             }
 
+            // Coexistence echo (smb_message_echoes): a message the business team sent from the
+            // WhatsApp mobile app — capture it as an OUTBOUND message so the dashboard shows the
+            // full two-way thread. (API-sent messages arrive as message_api_* and are already stored.)
+            if (string.Equals(data.Type, "message_echo", StringComparison.OrdinalIgnoreCase))
+            {
+                await CaptureEchoAsync(data, sessionId);
+                return Ok(new { status = "echo_captured" });
+            }
+
             // Only process incoming customer messages
             if (!string.Equals(data.Type, "message_received", StringComparison.OrdinalIgnoreCase))
             {
@@ -104,22 +113,9 @@ public class WebhookController : ControllerBase
                 _ => rawType
             };
 
-            // Clean up message text based on type
-            string messageText;
-            if (rawText == "None" || rawText == "null" || string.IsNullOrWhiteSpace(rawText))
-            {
-                messageText = "";
-            }
-            else if (messageType == "contacts" || rawText.TrimStart().StartsWith('[') || rawText.TrimStart().StartsWith('{'))
-            {
-                // Contact card or JSON payload — store as a readable label instead of raw JSON
-                messageText = "[Contact shared]";
-                messageType = "text";
-            }
-            else
-            {
-                messageText = rawText;
-            }
+            // Clean up message text: normalize special payloads (contacts, reactions, revokes) to readable text.
+            var (messageText, normalizedType) = NormalizeInteraktMessage(rawText, messageType);
+            messageType = normalizedType;
             var mediaUrl      = data.Data?.Message?.Media_Url;
             var messageId     = data.Data?.Message?.Id;
 
@@ -279,5 +275,193 @@ public class WebhookController : ControllerBase
 
         _logger.LogWarning("Meta webhook verification failed — token mismatch");
         return Forbid();
+    }
+
+    /// <summary>
+    /// Captures a Coexistence "message_echo" — a message the business team sent from the WhatsApp
+    /// mobile app — as an OUTBOUND message on the matching conversation. Best-effort and idempotent
+    /// (deduped on the provider message id); never sends anything back and never runs the AI pipeline.
+    /// </summary>
+    private async Task CaptureEchoAsync(InteraktIncomingMessage data, int? sessionId)
+    {
+        var customerPhone = (data.Data?.Customer?.Country_Code ?? "") + (data.Data?.Customer?.Phone_Number ?? "");
+        if (string.IsNullOrEmpty(customerPhone))
+        {
+            _logger.LogWarning("Echo ignored — missing contact phone.");
+            return;
+        }
+
+        var customerName = data.Data?.Customer?.Traits?.Name;
+        if (string.IsNullOrWhiteSpace(customerName)) customerName = null;
+
+        var providerMessageId = data.Data?.Message?.Id;
+        var rawText = data.Data?.Message?.Message ?? "";
+        var rawType = (data.Data?.Message?.Message_Content_Type ?? "text").ToLower();
+        var messageType = rawType switch
+        {
+            "voice" => "audio",
+            "sticker" => "image",
+            _ => rawType
+        };
+        var mediaUrl = data.Data?.Message?.Media_Url;
+
+        // Same normalization the inbound path uses — shared contacts, reactions and revokes all arrive
+        // as JSON and would otherwise be stored (and shown) as raw blobs.
+        var (messageText, normalizedType) = NormalizeInteraktMessage(rawText, messageType);
+        messageType = normalizedType;
+
+        var sp = HttpContext.RequestServices;
+        var sessionRepo = sp.GetRequiredService<WhatsAppSessionRepository>();
+        var messageRepo = sp.GetRequiredService<MessageRepository>();
+        var convService = sp.GetRequiredService<ConversationService>();
+        var messageService = sp.GetRequiredService<MessageService>();
+
+        // Idempotency — Interakt can re-deliver; skip if we already stored this message id.
+        if (!string.IsNullOrEmpty(providerMessageId) &&
+            await messageRepo.ExistsByProviderMessageIdAsync(providerMessageId))
+        {
+            _logger.LogInformation("Duplicate echo ignored — providerMessageId {Id} already stored.", providerMessageId);
+            return;
+        }
+
+        // Resolve the sending business number's session (same ?sid the inbound webhook uses, so the
+        // echo lands in the same conversation thread), falling back to the first active Interakt session.
+        var session = sessionId.HasValue ? await sessionRepo.GetByIdAsync(sessionId.Value) : null;
+        session ??= await sessionRepo.GetFirstActiveByProviderAsync("Interakt");
+        if (session == null)
+        {
+            _logger.LogWarning("Echo ignored — could not resolve a session (sid={Sid}).", sessionId);
+            return;
+        }
+
+        var conversation = await convService.GetOrCreateConversationAsync(session.Id, customerPhone, customerName);
+        if (conversation == null)
+        {
+            _logger.LogWarning("Echo ignored — failed to get/create conversation for {Phone}.", customerPhone);
+            return;
+        }
+
+        await messageService.SaveOutboundMessageAsync(
+            conversation.Id,
+            messageText,
+            isAiGenerated: false,
+            messageType: messageType,
+            mediaUrl: mediaUrl,
+            providerMessageId: providerMessageId);
+
+        _logger.LogInformation(
+            "Echo captured (business→contact) — Conv {Conv}, Contact {Phone}, Type {Type}.",
+            conversation.Id, customerPhone, messageType);
+    }
+
+    /// <summary>
+    /// Normalizes Interakt's special message payloads — shared contacts, reactions and revokes all
+    /// arrive as JSON inside the message text — into short readable text. Returns the text to store
+    /// and the (possibly changed) message type.
+    /// </summary>
+    private static (string Text, string Type) NormalizeInteraktMessage(string? rawText, string messageType)
+    {
+        if (rawText is "None" or "null" || string.IsNullOrWhiteSpace(rawText))
+            return ("", messageType);
+
+        var trimmed = rawText.TrimStart();
+
+        // Reaction / revoke and other WhatsApp control payloads (a JSON object carrying a "type" field).
+        if (trimmed.StartsWith('{') && FormatControlMessage(rawText) is { } control)
+            return (control, "text");
+
+        // Shared contact card (JSON array, or a single contact object).
+        if (messageType == "contacts" || trimmed.StartsWith('[') || trimmed.StartsWith('{'))
+            return (FormatSharedContacts(rawText) ?? "[Contact shared]", "text");
+
+        return (rawText, messageType);
+    }
+
+    /// <summary>
+    /// Formats WhatsApp control payloads that arrive as JSON: reactions ("Reacted 👍") and revokes
+    /// ("message deleted"). Returns null if the JSON isn't a recognised control message.
+    /// </summary>
+    private static string? FormatControlMessage(string raw)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+            if (!doc.RootElement.TryGetProperty("type", out var typeEl)) return null;
+
+            switch (typeEl.GetString()?.ToLowerInvariant())
+            {
+                case "reaction":
+                    var emoji = doc.RootElement.TryGetProperty("reaction", out var r)
+                                && r.TryGetProperty("emoji", out var e) ? e.GetString() : null;
+                    return string.IsNullOrEmpty(emoji) ? "↩ Removed a reaction" : $"Reacted {emoji}";
+                case "revoke":
+                    return "🚫 This message was deleted";
+                default:
+                    return null;
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Turns a shared-contact payload (WhatsApp contacts JSON — array or single object) into readable
+    /// text like "📇 John Doe · +919999999999". Returns null if it can't be parsed as a contact card.
+    /// </summary>
+    private static string? FormatSharedContacts(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+            var items = root.ValueKind == System.Text.Json.JsonValueKind.Array
+                ? root.EnumerateArray().ToList()
+                : new System.Collections.Generic.List<System.Text.Json.JsonElement> { root };
+
+            var lines = new System.Collections.Generic.List<string>();
+            foreach (var c in items)
+            {
+                if (c.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+
+                string? name = null;
+                if (c.TryGetProperty("name", out var nameEl))
+                {
+                    if (nameEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        if (nameEl.TryGetProperty("formatted_name", out var fn)) name = fn.GetString();
+                        if (string.IsNullOrWhiteSpace(name) && nameEl.TryGetProperty("first_name", out var f)) name = f.GetString();
+                    }
+                    else if (nameEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                        name = nameEl.GetString();
+                }
+
+                string? phone = null;
+                if (c.TryGetProperty("phones", out var phones) && phones.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var p in phones.EnumerateArray())
+                    {
+                        if (p.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            if (p.TryGetProperty("phone", out var ph) && !string.IsNullOrWhiteSpace(ph.GetString())) { phone = ph.GetString(); break; }
+                            if (p.TryGetProperty("wa_id", out var wa) && !string.IsNullOrWhiteSpace(wa.GetString())) { phone = wa.GetString(); break; }
+                        }
+                        else if (p.ValueKind == System.Text.Json.JsonValueKind.String) { phone = p.GetString(); break; }
+                    }
+                }
+
+                var parts = new[] { name, phone }.Where(x => !string.IsNullOrWhiteSpace(x));
+                if (parts.Any()) lines.Add("📇 " + string.Join(" · ", parts));
+            }
+
+            return lines.Count > 0 ? string.Join("\n", lines) : null;
+        }
+        catch
+        {
+            return null; // not contact JSON — caller falls back to "[Contact shared]"
+        }
     }
 }

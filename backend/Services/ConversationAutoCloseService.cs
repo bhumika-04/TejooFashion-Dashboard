@@ -1,12 +1,13 @@
-using Dapper;
 using TejooWhatsApp.Repositories;
 using TejooWhatsApp.Utilities;
 
 namespace TejooWhatsApp.Services;
 
 /// <summary>
-/// Runs every hour. If auto-close is enabled in SystemSettings, closes all Open/Escalated
-/// conversations whose LastMessageAt is older than the configured threshold (default 24h).
+/// Runs every hour. If auto-close is enabled in SystemSettings, closes Open conversations whose
+/// LastMessageAt is older than the configured threshold (default 24h). Escalated conversations are
+/// left alone — they're in an active CRR→Manager→HOD workflow and are resolved by a human (which
+/// also resolves the escalation), not by an inactivity timer.
 /// </summary>
 public class ConversationAutoCloseService : BackgroundService
 {
@@ -57,7 +58,7 @@ public class ConversationAutoCloseService : BackgroundService
             UPDATE Conversations
             SET Status  = 'Closed',
                 ClosedAt = GETUTCDATE()
-            WHERE Status IN ('Open', 'Escalated')
+            WHERE Status = 'Open'
               AND (
                     (LastMessageAt IS NULL    AND CreatedAt    < @Cutoff)
                  OR (LastMessageAt IS NOT NULL AND LastMessageAt < @Cutoff)

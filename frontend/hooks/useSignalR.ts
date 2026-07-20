@@ -34,10 +34,14 @@ export function useSignalR(onNotification: NotificationHandler): {
     handlerRef.current = onNotification;
   }, [onNotification]);
 
-  const connect = useCallback(async () => {
+  useEffect(() => {
     const token = localStorage.getItem('authToken');
     if (!token) return;
 
+    // Captured locally so cleanup can always stop THIS connection, even if it is torn
+    // down (e.g. React Strict Mode double-mount) before start() resolves. Without this,
+    // the connection would be orphaned and the user group would receive every push twice.
+    let cancelled = false;
     const connection = new signalR.HubConnectionBuilder()
       .withUrl(HUB_URL, {
         accessTokenFactory: () => token,
@@ -47,52 +51,48 @@ export function useSignalR(onNotification: NotificationHandler): {
       .configureLogging(signalR.LogLevel.Warning)
       .build();
 
+    connectionRef.current = connection;
+
+    const joinUserGroup = async () => {
+      const raw = localStorage.getItem('user');
+      if (!raw) return;
+      const user = JSON.parse(raw);
+      const userId = user.id ?? user.Id;
+      if (userId) await connection.invoke('JoinUserGroup', userId);
+    };
+
     connection.on('ReceiveNotification', (notification: SignalRNotification) => {
       handlerRef.current(notification);
     });
 
-    connection.onreconnecting(() => {
-      setIsConnected(false);
-    });
-
+    connection.onreconnecting(() => setIsConnected(false));
     connection.onreconnected(async () => {
       setIsConnected(true);
-      // Re-join user group after reconnect
-      const raw = localStorage.getItem('user');
-      if (raw) {
-        const user = JSON.parse(raw);
-        const userId = user.id ?? user.Id;
-        if (userId) await connection.invoke('JoinUserGroup', userId);
-      }
+      await joinUserGroup().catch(() => {});
     });
 
-    try {
-      await connection.start();
-      setIsConnected(true);
-
-      // Join user group for targeted notifications
-      const raw = localStorage.getItem('user');
-      if (raw) {
-        const user = JSON.parse(raw);
-        const userId = user.id ?? user.Id;
-        if (userId) await connection.invoke('JoinUserGroup', userId);
+    (async () => {
+      try {
+        await connection.start();
+        if (cancelled) {
+          // Effect was already cleaned up while starting — stop and bail out
+          await connection.stop();
+          return;
+        }
+        setIsConnected(true);
+        await joinUserGroup();
+      } catch {
+        // connection failed — SignalR will retry automatically
       }
-
-      connectionRef.current = connection;
-    } catch {
-      // connection failed — SignalR will retry automatically
-    }
-  }, []);
-
-  useEffect(() => {
-    connect();
+    })();
 
     return () => {
-      connectionRef.current?.stop();
-      connectionRef.current = null;
+      cancelled = true;
+      connection.stop().catch(() => {});
+      if (connectionRef.current === connection) connectionRef.current = null;
       setIsConnected(false);
     };
-  }, [connect]);
+  }, []);
 
   const joinConversation = useCallback((id: number) => {
     connectionRef.current?.invoke('JoinConversation', id).catch(() => {});

@@ -1,14 +1,5 @@
 namespace TejooWhatsApp.Models.DTOs;
 
-// Generic webhook payload wrapper
-public class WebhookPayload
-{
-    public string Provider { get; set; } = string.Empty;
-    public string Event { get; set; } = string.Empty;
-    public DateTime Timestamp { get; set; }
-    public object? Data { get; set; }
-}
-
 // Interakt incoming message (actual webhook format)
 public class InteraktIncomingMessage
 {

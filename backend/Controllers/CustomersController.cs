@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 using TejooWhatsApp.Repositories;
 
 namespace TejooWhatsApp.Controllers;
@@ -19,22 +21,36 @@ public class CustomersController : ControllerBase
         _tags = tags;
     }
 
+    // CRR/agents may only see customers tied to conversations assigned to them. Enforced from the
+    // JWT (not a client-supplied param) so it can't be bypassed by calling the API directly.
+    // Returns null for privileged roles (no scoping = see all).
+    private int? ScopeUserId()
+    {
+        var role = User.FindFirst(ClaimTypes.Role)?.Value ?? "";
+        if (role is not ("CRR" or "AGENT")) return null;
+
+        var idStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                 ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        return int.TryParse(idStr, out var id) ? id : -1; // -1 = matches nothing, fail closed
+    }
+
     // GET /api/customers/stats
     [HttpGet("stats")]
     public async Task<IActionResult> GetStats()
     {
-        var stats = await _customers.GetStatsAsync();
+        var stats = await _customers.GetStatsAsync(ScopeUserId());
         return Ok(stats);
     }
 
-    // GET /api/customers?search=&page=1&pageSize=20
+    // GET /api/customers?search=&page=1&pageSize=20&tagId=
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] string? search,
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 20)
+        [FromQuery] int pageSize = 20,
+        [FromQuery] int? tagId = null)
     {
-        var (customers, total) = await _customers.GetPagedAsync(search, page, pageSize);
+        var (customers, total) = await _customers.GetPagedAsync(search, page, pageSize, tagId, ScopeUserId());
         return Ok(new { customers, total, page, pageSize });
     }
 
@@ -101,6 +117,32 @@ public class CustomersController : ControllerBase
         await _tags.RemoveFromCustomerAsync(id, tagId);
         return Ok(new { success = true });
     }
+
+    // POST /api/customers/bulk-tag — add or remove one tag across many customers at once
+    [HttpPost("bulk-tag")]
+    public async Task<IActionResult> BulkTag([FromBody] BulkCustomerTagRequest req)
+    {
+        if (req.CustomerIds is null || req.CustomerIds.Length == 0)
+            return BadRequest(new { error = "No customers selected" });
+        if (req.TagId <= 0)
+            return BadRequest(new { error = "A tag is required" });
+
+        var affected = 0;
+        foreach (var id in req.CustomerIds.Distinct())
+        {
+            try
+            {
+                if (string.Equals(req.Action, "remove", StringComparison.OrdinalIgnoreCase))
+                    await _tags.RemoveFromCustomerAsync(id, req.TagId);
+                else
+                    await _tags.AddToCustomerAsync(id, req.TagId);
+                affected++;
+            }
+            catch { /* skip this one, keep going */ }
+        }
+        return Ok(new { success = true, affected });
+    }
 }
 
 public record UpdateCustomerRequest(string? Name, string? Email, string? Notes);
+public record BulkCustomerTagRequest(int[] CustomerIds, int TagId, string Action);

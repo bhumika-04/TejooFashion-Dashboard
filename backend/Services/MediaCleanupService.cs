@@ -1,4 +1,3 @@
-using Dapper;
 using TejooWhatsApp.Repositories;
 using TejooWhatsApp.Utilities;
 
@@ -45,6 +44,36 @@ public class MediaCleanupService : BackgroundService
 
     private async Task RunCleanupAsync(CancellationToken ct)
     {
+        // Keep the InboxMessages queue table from growing forever — drop processed rows older than
+        // 7 days. Runs first (and unconditionally) so it isn't skipped when there's no uploads folder.
+        try
+        {
+            using var purgeScope = _scopeFactory.CreateScope();
+            var queue = purgeScope.ServiceProvider.GetRequiredService<MessageQueueService>();
+            var purged = await queue.PurgeProcessedAsync(olderThanDays: 7);
+            if (purged > 0)
+                _logger.LogInformation("InboxCleanup: purged {Count} processed inbox row(s) older than 7 days.", purged);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("InboxCleanup: purge failed: {Error}", ex.Message);
+        }
+
+        // Prune the Notifications table (read >30 days, or anything >90 days) so the bell history stays
+        // bounded. Also unconditional — not gated on the uploads folder existing.
+        try
+        {
+            using var notifScope = _scopeFactory.CreateScope();
+            var notifRepo = notifScope.ServiceProvider.GetRequiredService<NotificationRepository>();
+            var purgedNotifs = await notifRepo.PurgeOldAsync(readRetentionDays: 30, hardCapDays: 90);
+            if (purgedNotifs > 0)
+                _logger.LogInformation("NotificationCleanup: purged {Count} old notification(s).", purgedNotifs);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("NotificationCleanup: purge failed: {Error}", ex.Message);
+        }
+
         var uploadsRoot = Path.Combine(_env.WebRootPath, "uploads", "conversations");
         if (!Directory.Exists(uploadsRoot)) return;
 

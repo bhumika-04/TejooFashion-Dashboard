@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using TejooWhatsApp.Repositories;
 using TejooWhatsApp.AI;
+using TejooWhatsApp.Models.Entities;
 
 namespace TejooWhatsApp.Controllers;
 
@@ -11,16 +12,57 @@ public class AiPromptsController : ControllerBase
 {
     private readonly AiPromptRepository _promptRepo;
     private readonly PromptLoader _promptLoader;
+    private readonly AiRouterService _aiRouter;
+    private readonly MessageRepository _messageRepo;
     private readonly ILogger<AiPromptsController> _logger;
 
     public AiPromptsController(
         AiPromptRepository promptRepo,
         PromptLoader promptLoader,
+        AiRouterService aiRouter,
+        MessageRepository messageRepo,
         ILogger<AiPromptsController> logger)
     {
         _promptRepo = promptRepo;
         _promptLoader = promptLoader;
+        _aiRouter = aiRouter;
+        _messageRepo = messageRepo;
         _logger = logger;
+    }
+
+    // Dry-run the real AI pipeline (router → specialist) for a message and return what it WOULD do —
+    // intent, reply, confidence, and the same send/escalate decision the orchestrator makes — WITHOUT
+    // sending anything or touching the conversation. Lets the team vet the AI before enabling auto-reply.
+    [HttpPost("test")]
+    public async Task<IActionResult> Test([FromBody] TestPromptRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Message))
+            return BadRequest(new { error = "Message is required" });
+
+        var history = new List<Message>();
+        if (request.ConversationId is int cid && cid > 0)
+            history = await _messageRepo.GetRecentMessagesAsync(cid, 10);
+
+        var result = await _aiRouter.ProcessMessageAsync(request.Message, history);
+
+        // Mirror WhatsAppOrchestrator's decision so the preview matches real runtime behaviour.
+        string decision;
+        if (result.ShouldEscalate || (result.Confidence.HasValue && result.Confidence < 0.5m))
+            decision = "escalate";
+        else if (!string.IsNullOrWhiteSpace(result.ResponseText))
+            decision = "send";
+        else
+            decision = "no_reply";
+
+        return Ok(new
+        {
+            intent = result.Intent,
+            reply = result.ResponseText,
+            confidence = result.Confidence,
+            shouldEscalate = result.ShouldEscalate,
+            decision,
+            error = result.ErrorMessage
+        });
     }
 
     [HttpGet]
@@ -82,4 +124,10 @@ public class UpdateAiPromptRequest
 public class TogglePromptRequest
 {
     public bool IsActive { get; set; }
+}
+
+public class TestPromptRequest
+{
+    public string Message { get; set; } = string.Empty;
+    public int? ConversationId { get; set; }
 }

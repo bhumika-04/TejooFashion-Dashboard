@@ -1,4 +1,3 @@
-using Dapper;
 using TejooWhatsApp.Models.Entities;
 using TejooWhatsApp.Utilities;
 
@@ -67,12 +66,19 @@ public class NotificationRepository
         return await connection.ExecuteAsync(sql, new { UserId = userId });
     }
 
-    // Delete old notifications (cleanup)
-    public async Task<int> DeleteOldNotificationsAsync(int daysOld = 30)
+    /// <summary>
+    /// Prunes the Notifications table so it can't grow without bound: deletes READ notifications older
+    /// than <paramref name="readRetentionDays"/>, plus ANY notification (read or not) older than
+    /// <paramref name="hardCapDays"/> as a backstop. Returns the number of rows deleted.
+    /// </summary>
+    public async Task<int> PurgeOldAsync(int readRetentionDays = 30, int hardCapDays = 90)
     {
         using var connection = _db.CreateConnection();
-        var sql = "DELETE FROM Notifications WHERE CreatedAt < DATEADD(day, -@DaysOld, GETUTCDATE())";
-        return await connection.ExecuteAsync(sql, new { DaysOld = daysOld });
+        var sql = @"
+            DELETE FROM Notifications
+            WHERE (IsRead = 1 AND CreatedAt < DATEADD(day, -@ReadDays, GETUTCDATE()))
+               OR (CreatedAt < DATEADD(day, -@HardCapDays, GETUTCDATE()))";
+        return await connection.ExecuteAsync(sql, new { ReadDays = readRetentionDays, HardCapDays = hardCapDays });
     }
 }
 

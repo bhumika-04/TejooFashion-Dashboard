@@ -66,6 +66,40 @@ export function formatChartDate(date: string | Date | null | undefined): string 
   return `${parts.day}-${parts.month}`;
 }
 
+/** h:mm AM/PM — per-message time in IST (WhatsApp style) */
+export function formatMessageTime(date: string | Date | null | undefined): string {
+  const d = parseUTC(date);
+  if (!d) return '';
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: IST, hour: 'numeric', minute: '2-digit', hour12: true,
+  }).format(d).toLowerCase();
+}
+
+/** "Today" / "Yesterday" / "DD-MM-YYYY" — date-separator label in IST (WhatsApp style) */
+export function formatDayLabel(date: string | Date | null | undefined): string {
+  const d = parseUTC(date);
+  if (!d) return '';
+  const dayKey = (x: Date) => istParts(x).day + istParts(x).month + istParts(x).year;
+  const now = new Date();
+  const yesterday = new Date(now.getTime() - 86400000);
+  if (dayKey(d) === dayKey(now)) return 'Today';
+  if (dayKey(d) === dayKey(yesterday)) return 'Yesterday';
+  return formatDateOnly(d);
+}
+
+/**
+ * Per-message chat timestamp (IST): just the time for today's messages,
+ * date + time for older ones (e.g. "1:28 pm", "Yesterday 1:28 pm", "30-05-2026 1:28 pm").
+ */
+export function formatChatTimestamp(date: string | Date | null | undefined): string {
+  const time = formatMessageTime(date);
+  if (!time) return '';
+  const label = formatDayLabel(date);
+  if (label === 'Today') return time;
+  if (label === 'Yesterday') return `Yesterday ${time}`;
+  return `${label} ${time}`;
+}
+
 /** HH:mm — always in IST */
 export function formatTime(date: string | Date | null | undefined): string {
   const d = parseUTC(date);

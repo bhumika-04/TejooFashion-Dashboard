@@ -1,4 +1,3 @@
-using Dapper;
 using TejooWhatsApp.Utilities;
 
 namespace TejooWhatsApp.Repositories;

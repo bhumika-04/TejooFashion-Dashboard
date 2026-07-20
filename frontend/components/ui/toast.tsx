@@ -19,14 +19,23 @@ interface ToastContextType {
 
 const ToastContext = React.createContext<ToastContextType | undefined>(undefined);
 
+// Keep only the most recent few toasts so a burst of messages can't flood the screen.
+const MAX_VISIBLE_TOASTS = 4;
+const TOAST_DURATION_MS = 4000;
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = React.useState<Toast[]>([]);
 
   const showToast = React.useCallback((message: string, type: ToastType) => {
     const id = Math.random().toString(36).substr(2, 9);
-    setToasts((prev) => [...prev, { id, message, type, isLeaving: false }]);
+    setToasts((prev) => {
+      // Collapse an immediately-repeated identical message into a single toast
+      const last = prev[prev.length - 1];
+      if (last && last.message === message && last.type === type) return prev;
+      // Cap the stack — drop the oldest when over the limit
+      return [...prev, { id, message, type, isLeaving: false }].slice(-MAX_VISIBLE_TOASTS);
+    });
 
-    // Auto remove after 5 seconds
     setTimeout(() => {
       setToasts((prev) =>
         prev.map((t) => (t.id === id ? { ...t, isLeaving: true } : t))
@@ -34,7 +43,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, 200);
-    }, 5000);
+    }, TOAST_DURATION_MS);
   }, []);
 
   const removeToast = (id: string) => {
