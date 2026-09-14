@@ -29,16 +29,22 @@ public class ConversationSummaryService : BackgroundService
     {
         _logger.LogInformation("ConversationSummaryService started — refreshing summaries every {Min} min.", _interval.TotalMinutes);
 
-        // Stagger startup so it doesn't run alongside the other boot-time background services
-        await Task.Delay(TimeSpan.FromMinutes(3), stoppingToken);
-
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try { await RunAsync(stoppingToken); }
-            catch (Exception ex) { _logger.LogError(ex, "Summary refresh cycle failed."); }
+            // Stagger startup so it doesn't run alongside the other boot-time background services
+            await Task.Delay(TimeSpan.FromMinutes(3), stoppingToken);
 
-            await Task.Delay(_interval, stoppingToken);
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try { await RunAsync(stoppingToken); }
+                // Shutdown cancels the token mid-cycle — that's expected, not a failure.
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                catch (Exception ex) { _logger.LogError(ex, "Summary refresh cycle failed."); }
+
+                await Task.Delay(_interval, stoppingToken);
+            }
         }
+        catch (OperationCanceledException) { /* stopping — normal shutdown */ }
     }
 
     private async Task RunAsync(CancellationToken ct)
