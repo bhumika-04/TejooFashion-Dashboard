@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Phone, MessageSquare, AlertTriangle, BarChart3,
   ChevronLeft, ChevronRight, ChevronDown,
   Settings, TrendingUp, UserRound, Zap, Images,
-  User, Users, ShieldCheck, UsersRound, ClipboardList, Webhook, Activity,
+  Users, ShieldCheck, UsersRound, ClipboardList, Webhook, Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -28,9 +28,8 @@ const SETTINGS_SUB = [
   { name: 'User Management',  href: '/dashboard/users',           icon: Users,         page: 'users' },
   { name: 'Role Management',  href: '/dashboard/role-management', icon: ShieldCheck,   page: 'role-management' },
   { name: 'Teams',            href: '/dashboard/teams',           icon: UsersRound,    page: 'teams' },
-  { name: 'Audit Logs',       href: '/dashboard/audit-logs',      icon: ClipboardList, page: 'audit-logs' },
-  { name: 'Webhook Logs',     href: '/dashboard/webhook-logs',    icon: Webhook,       page: 'webhook-logs' },
-  { name: 'System Health',    href: '/dashboard/system',          icon: Activity,      page: 'system-health' },
+  // Audit Logs, Webhook Logs and System Health are developer-only — hidden from navigation,
+  // reachable by direct URL only.
 ];
 
 const SETTINGS_PAGES = new Set(SETTINGS_SUB.map(s => s.href));
@@ -74,14 +73,15 @@ export default function Sidebar() {
 
   return (
     <div className={cn(
-      'hidden lg:flex h-screen flex-col bg-white border-r border-gray-100 transition-all duration-300 ease-in-out flex-shrink-0',
+      'hidden lg:flex h-screen flex-col bg-beige border-r border-beige-200 transition-all duration-300 ease-in-out flex-shrink-0',
       isCollapsed ? 'w-[68px]' : 'w-60'
     )}>
-      {/* Logo */}
-      <div className="flex h-16 items-center justify-between px-4 border-b border-gray-100">
+      {/* Brand wordmark — border matches the header separator (same height + colour) so the line is continuous */}
+      <div className="flex h-16 items-center justify-between px-4 border-b border-beige-200">
         {!isCollapsed && (
-          <span className="text-[17px] font-bold text-gray-900 tracking-tight animate-fade-in">
-            Tejoo Fashion
+          <span className="animate-fade-in text-lg font-bold tracking-tight leading-none">
+            <span className="text-emerald-700">Tejoo</span>
+            <span className="text-gray-800"> Fashion</span>
           </span>
         )}
         <button
@@ -109,18 +109,21 @@ export default function Sidebar() {
                 'relative flex items-center rounded-xl transition-all duration-200 ease-in-out group overflow-hidden',
                 isCollapsed ? 'justify-center px-0 py-3 mx-1' : 'px-3 py-2.5',
                 isActive
-                  ? 'bg-indigo-700 text-white shadow-sm'
-                  : 'text-gray-500 hover:bg-indigo-50 hover:text-indigo-700'
+                  ? 'bg-emerald-100 text-emerald-700 shadow-sm font-semibold'
+                  : 'text-gray-500 hover:bg-emerald-50 hover:text-emerald-700'
               )}
             >
+              {isActive && !isCollapsed && (
+                <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-1 rounded-r-full bg-emerald-600" />
+              )}
               <item.icon className={cn(
                 'h-[17px] w-[17px] flex-shrink-0 transition-all duration-200',
-                isActive ? 'text-white' : 'text-gray-400 group-hover:text-indigo-600 group-hover:scale-110'
+                isActive ? 'text-emerald-600' : 'text-gray-400 group-hover:text-emerald-600 group-hover:scale-110'
               )} />
               {!isCollapsed && (
                 <span className={cn(
                   'ml-3 text-[13px] transition-all duration-200',
-                  isActive ? 'font-semibold text-white' : 'font-medium text-gray-500 group-hover:text-indigo-700'
+                  isActive ? 'font-semibold text-emerald-700' : 'font-medium text-gray-500 group-hover:text-emerald-700'
                 )}>
                   {item.name}
                 </span>
@@ -147,19 +150,19 @@ export default function Sidebar() {
                 'w-full flex items-center rounded-xl transition-all duration-200 group',
                 isCollapsed ? 'justify-center px-0 py-3 mx-1' : 'px-3 py-2.5',
                 isSettingsActive
-                  ? 'bg-indigo-50 text-indigo-700'
-                  : 'text-gray-500 hover:bg-indigo-50 hover:text-indigo-700'
+                  ? 'bg-emerald-50 text-emerald-700'
+                  : 'text-gray-500 hover:bg-emerald-50 hover:text-emerald-700'
               )}
             >
               <Settings className={cn(
                 'h-[17px] w-[17px] flex-shrink-0 transition-all duration-200',
-                isSettingsActive ? 'text-indigo-600' : 'text-gray-400 group-hover:text-indigo-600 group-hover:scale-110'
+                isSettingsActive ? 'text-emerald-600' : 'text-gray-400 group-hover:text-emerald-600 group-hover:scale-110'
               )} />
               {!isCollapsed && (
                 <>
                   <span className={cn(
                     'ml-3 text-[13px] font-medium flex-1 text-left transition-all duration-200',
-                    isSettingsActive ? 'text-indigo-700 font-semibold' : 'text-gray-500 group-hover:text-indigo-700'
+                    isSettingsActive ? 'text-emerald-700 font-semibold' : 'text-gray-500 group-hover:text-emerald-700'
                   )}>
                     Settings
                   </span>
@@ -183,13 +186,13 @@ export default function Sidebar() {
                       className={cn(
                         'flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12.5px] transition-all duration-150 group',
                         isActive
-                          ? 'bg-indigo-700 text-white font-semibold'
-                          : 'text-gray-500 hover:bg-indigo-50 hover:text-indigo-700 font-medium'
+                          ? 'bg-emerald-100 text-emerald-700 font-semibold'
+                          : 'text-gray-500 hover:bg-emerald-50 hover:text-emerald-700 font-medium'
                       )}
                     >
                       <sub.icon className={cn(
                         'h-3.5 w-3.5 flex-shrink-0',
-                        isActive ? 'text-white' : 'text-gray-400 group-hover:text-indigo-600'
+                        isActive ? 'text-emerald-600' : 'text-gray-400 group-hover:text-emerald-600'
                       )} />
                       {sub.name}
                     </Link>
@@ -211,8 +214,8 @@ export default function Sidebar() {
             isCollapsed ? 'justify-center p-2 mx-1' : 'gap-3 px-3 py-2.5'
           )}
         >
-          <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0 ring-2 ring-gray-100">
-            <span className="text-xs font-bold text-white">{initials}</span>
+          <div className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center flex-shrink-0 ring-2 ring-gray-100">
+            <span className="text-xs font-bold text-slate-700">{initials}</span>
           </div>
           {!isCollapsed && currentUser && (
             <div className="flex-1 min-w-0">

@@ -48,9 +48,10 @@ public class CustomersController : ControllerBase
         [FromQuery] string? search,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
-        [FromQuery] int? tagId = null)
+        [FromQuery] int? tagId = null,
+        [FromQuery] int? convTagId = null)
     {
-        var (customers, total) = await _customers.GetPagedAsync(search, page, pageSize, tagId, ScopeUserId());
+        var (customers, total) = await _customers.GetPagedAsync(search, page, pageSize, tagId, convTagId, ScopeUserId());
         return Ok(new { customers, total, page, pageSize });
     }
 

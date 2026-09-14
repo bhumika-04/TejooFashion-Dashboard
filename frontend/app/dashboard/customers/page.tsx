@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import Link from 'next/link';
 import { createPortal } from 'react-dom';
 import { customersApi, tagsApi } from '@/services/api';
-import { Search, Phone, Mail, MessageSquare, RefreshCw, ChevronLeft, ChevronRight, X, Users, UserCheck, Sparkles, Clock, Tag, Plus, Check, Download, Filter, ChevronDown } from 'lucide-react';
+import { Search, Phone, Mail, MessageSquare, RefreshCw, X, Users, UserCheck, Sparkles, Clock, Tag, Plus, Check, Download, Filter, ChevronDown } from 'lucide-react';
 import { getRelativeTime } from '@/lib/utils';
 import { KPICard } from '@/components/ui/kpi-card';
 import { Pagination } from '@/components/ui/pagination';
@@ -17,6 +18,7 @@ export default function CustomersPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [filterTagId, setFilterTagId] = useState<number | null>(null);
+  const [filterConvTagId, setFilterConvTagId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [conversations, setConversations] = useState<any[]>([]);
@@ -25,6 +27,7 @@ export default function CustomersPage() {
   const [editForm, setEditForm] = useState({ name: '', email: '', notes: '' });
   const [customerTags, setCustomerTags] = useState<any[]>([]);
   const [allTags, setAllTags] = useState<any[]>([]);
+  const [allConvTags, setAllConvTags] = useState<any[]>([]);
   const [showTagMenu, setShowTagMenu] = useState(false);
   const tagMenuRef = useRef<HTMLDivElement>(null);
   const [showFilterMenu, setShowFilterMenu] = useState(false);
@@ -37,13 +40,13 @@ export default function CustomersPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const bulkTagRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToast();
-  const PAGE_SIZE = 20;
+  const PAGE_SIZE = 100;
   const searchTimer = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchCustomers = async (p = page, q = search, tagId = filterTagId) => {
+  const fetchCustomers = async (p = page, q = search, tagId = filterTagId, convTagId = filterConvTagId) => {
     setLoading(true);
     try {
-      const res = await customersApi.getAll(q || undefined, p, PAGE_SIZE, tagId ?? undefined);
+      const res = await customersApi.getAll(q || undefined, p, PAGE_SIZE, tagId ?? undefined, convTagId ?? undefined);
       setCustomers(res.data.customers ?? []);
       setTotal(res.data.total ?? 0);
     } catch {
@@ -62,6 +65,7 @@ export default function CustomersPage() {
     fetchCustomers(1, initial);
     customersApi.getStats().then(r => setStats(r.data)).catch(() => {});
     tagsApi.getAll('customer').then(r => setAllTags(r.data ?? [])).catch(() => {});
+    tagsApi.getAll('conversation').then(r => setAllConvTags(r.data ?? [])).catch(() => {});
     // Close tag menu on outside click
     const handler = (e: MouseEvent) => {
       if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node)) setShowTagMenu(false);
@@ -97,14 +101,21 @@ export default function CustomersPage() {
     const next = filterTagId === tagId ? null : tagId;
     setFilterTagId(next);
     setPage(1);
-    fetchCustomers(1, search, next);
+    fetchCustomers(1, search, next, filterConvTagId);
+  };
+
+  const handleConvTagFilter = (tagId: number | null) => {
+    const next = filterConvTagId === tagId ? null : tagId;
+    setFilterConvTagId(next);
+    setPage(1);
+    fetchCustomers(1, search, filterTagId, next);
   };
 
   // Export the current (searched / filtered) customer list to CSV.
   const exportCsv = async () => {
     setExporting(true);
     try {
-      const res = await customersApi.getAll(search || undefined, 1, Math.max(total, 1), filterTagId ?? undefined);
+      const res = await customersApi.getAll(search || undefined, 1, Math.max(total, 1), filterTagId ?? undefined, filterConvTagId ?? undefined);
       const rows: any[] = res.data.customers ?? [];
       const tagNames = (raw?: string) => (raw || '').split(';;').filter(Boolean).map(t => t.split('|')[0]).join('; ');
       const cell = (v: any) => {
@@ -216,12 +227,6 @@ export default function CustomersPage() {
     return digits.slice(-4);
   };
 
-  const statusColor: Record<string, string> = {
-    open: 'bg-green-100 text-green-700',
-    closed: 'bg-gray-100 text-gray-500',
-    escalated: 'bg-red-100 text-red-700',
-    pending: 'bg-yellow-100 text-yellow-700',
-  };
 
   return (
     <div className="flex flex-col h-full min-h-0 gap-0">
@@ -249,7 +254,7 @@ export default function CustomersPage() {
               value={searchInput}
               onChange={e => handleSearch(e.target.value)}
               placeholder="Search name, phone or email…"
-              className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
             />
             {searchInput && (
               <button onClick={clearSearch} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
@@ -258,46 +263,75 @@ export default function CustomersPage() {
             )}
           </div>
 
-          {/* Filter dropdown (tags) */}
-          {allTags.length > 0 && (
+          {/* Filter dropdown (customer + conversation tags) */}
+          {(allTags.length > 0 || allConvTags.length > 0) && (
             <div className="relative flex-shrink-0" ref={filterMenuRef}>
               <button
                 onClick={() => setShowFilterMenu(v => !v)}
                 className={`flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border transition-colors ${
-                  filterTagId ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                  (filterTagId || filterConvTagId) ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
                 }`}
               >
                 <Filter className="h-4 w-4" /> Filter
-                {filterTagId && <span className="h-1.5 w-1.5 rounded-full bg-indigo-600" />}
+                {(filterTagId || filterConvTagId) && <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />}
                 <ChevronDown className="h-3.5 w-3.5" />
               </button>
               {showFilterMenu && (
-                <div className="absolute right-0 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Filter by tag</p>
-                    {filterTagId && (
-                      <button onClick={() => handleTagFilter(null)} className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-0.5">
-                        <X className="h-3 w-3" /> Clear
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {allTags.map(tag => {
-                      const active = filterTagId === tag.id;
-                      return (
-                        <button
-                          key={tag.id}
-                          onClick={() => handleTagFilter(tag.id)}
-                          className="text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all"
-                          style={active
-                            ? { backgroundColor: tag.color, color: '#fff', borderColor: tag.color }
-                            : { backgroundColor: tag.color + '15', color: tag.color, borderColor: tag.color + '44' }}
-                        >
-                          {tag.name}
-                        </button>
-                      );
-                    })}
-                  </div>
+                <div className="absolute right-0 mt-1 w-64 max-h-[70vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3 space-y-3">
+                  {/* Customer tags */}
+                  {allTags.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Customer tags</p>
+                        {filterTagId && (
+                          <button onClick={() => handleTagFilter(null)} className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-0.5">
+                            <X className="h-3 w-3" /> Clear
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {allTags.map(tag => {
+                          const active = filterTagId === tag.id;
+                          return (
+                            <button key={tag.id} onClick={() => handleTagFilter(tag.id)}
+                              className="text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all"
+                              style={active
+                                ? { backgroundColor: tag.color, color: '#fff', borderColor: tag.color }
+                                : { backgroundColor: tag.color + '15', color: tag.color, borderColor: tag.color + '44' }}>
+                              {tag.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {/* Conversation tags */}
+                  {allConvTags.length > 0 && (
+                    <div className={allTags.length > 0 ? 'border-t border-gray-100 pt-3' : ''}>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Conversation tags</p>
+                        {filterConvTagId && (
+                          <button onClick={() => handleConvTagFilter(null)} className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-0.5">
+                            <X className="h-3 w-3" /> Clear
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {allConvTags.map(tag => {
+                          const active = filterConvTagId === tag.id;
+                          return (
+                            <button key={tag.id} onClick={() => handleConvTagFilter(tag.id)}
+                              className="text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all"
+                              style={active
+                                ? { backgroundColor: tag.color, color: '#fff', borderColor: tag.color }
+                                : { backgroundColor: tag.color + '15', color: tag.color, borderColor: tag.color + '44' }}>
+                              {tag.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -317,7 +351,7 @@ export default function CustomersPage() {
             <button
               onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
               className={`flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border transition-colors flex-shrink-0 ${
-                selectMode ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                selectMode ? 'bg-emerald-100 text-emerald-700 border-emerald-600' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
               }`}
             >
               <Check className="h-4 w-4" /> {selectMode ? 'Done' : 'Select'}
@@ -332,8 +366,8 @@ export default function CustomersPage() {
 
         {/* Bulk-tag action bar */}
         {selectMode && (
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-indigo-100 bg-indigo-50/60 flex-wrap">
-            <button onClick={selectAllVisible} className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 px-1.5">
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-emerald-100 bg-emerald-50/60 flex-wrap">
+            <button onClick={selectAllVisible} className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 px-1.5">
               {selectedIds.size === customers.length && customers.length > 0 ? 'Clear' : 'All'}
             </button>
             <span className="text-[11px] font-medium text-gray-600">{selectedIds.size} selected</span>
@@ -342,7 +376,7 @@ export default function CustomersPage() {
               <button
                 onClick={() => setShowBulkTag(v => !v)}
                 disabled={selectedIds.size === 0 || bulkBusy}
-                className="flex items-center gap-1 text-[11px] font-medium text-indigo-700 hover:text-indigo-900 px-2 py-1 rounded-lg hover:bg-indigo-100 disabled:opacity-40"
+                className="flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-900 px-2 py-1 rounded-lg hover:bg-emerald-100 disabled:opacity-40"
               >
                 <Tag className="h-3.5 w-3.5" /> Tag
               </button>
@@ -352,7 +386,7 @@ export default function CustomersPage() {
                   {allTags.map(tag => (
                     <div key={tag.id} className="flex items-center justify-between px-3 py-1.5 hover:bg-gray-50">
                       <span className="flex items-center gap-2 text-xs text-gray-700 truncate">
-                        <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: tag.color || '#6366f1' }} />
+                        <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: tag.color || '#10b981' }} />
                         {tag.name}
                       </span>
                       <span className="flex items-center gap-1 flex-shrink-0">
@@ -373,8 +407,8 @@ export default function CustomersPage() {
         )}
 
 
-        {/* Table */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Table — overflow-auto (both axes) so the wide table scrolls sideways on mobile instead of squishing */}
+        <div className="flex-1 overflow-auto">
           {loading ? (
             <div className="flex items-center justify-center h-32 text-gray-400 text-sm">Loading…</div>
           ) : customers.length === 0 ? (
@@ -386,7 +420,8 @@ export default function CustomersPage() {
               <p className="text-xs text-gray-400">Customers appear here once they message your WhatsApp number</p>
             </div>
           ) : (
-            <table className="w-full text-sm border-collapse">
+            <>
+            <table className="hidden lg:table w-full min-w-[720px] text-sm border-collapse">
               <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
                 <tr className="border-b border-gray-200">
                   {selectMode && <th className="w-10 px-3 py-2.5" />}
@@ -413,7 +448,7 @@ export default function CustomersPage() {
                   const renderChips = (list: string[]) =>
                     list.slice(0, 3).map((t: string, i: number) => {
                       const [name, color] = t.split('|');
-                      const col = color || '#6366f1';
+                      const col = color || '#10b981';
                       return (
                         <span key={i} className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border leading-none whitespace-nowrap"
                           style={{ color: col, borderColor: col + '55', backgroundColor: col + '15' }}>
@@ -426,13 +461,13 @@ export default function CustomersPage() {
                       key={c.id}
                       onClick={() => (selectMode ? toggleSelect(c.id) : openCustomer(c))}
                       className={`cursor-pointer transition-colors ${
-                        checked ? 'bg-indigo-50' : selected?.id === c.id ? 'bg-indigo-50/60' : 'hover:bg-gray-50'
+                        checked ? 'bg-emerald-50' : selected?.id === c.id ? 'bg-emerald-50/60' : 'hover:bg-gray-50'
                       }`}
                     >
                       {selectMode && (
                         <td className="px-3 py-3 align-middle">
                           <div className={`h-5 w-5 rounded-md border-2 flex items-center justify-center transition-colors ${
-                            checked ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300 bg-white'
+                            checked ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300 bg-white'
                           }`}>
                             {checked && <Check className="h-3.5 w-3.5 text-white" />}
                           </div>
@@ -442,14 +477,14 @@ export default function CustomersPage() {
                       <td className="px-4 py-3 align-middle text-gray-700 whitespace-nowrap">{c.phone}</td>
                       <td className="px-4 py-3 align-middle">
                         <div className="flex items-center gap-2.5">
-                          <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
-                            <span className="text-[11px] font-semibold text-indigo-700">{getAvatar(c.name, c.phone)}</span>
+                          <div className="h-8 w-8 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                            <span className="text-[11px] font-semibold text-emerald-700">{getAvatar(c.name, c.phone)}</span>
                           </div>
                           <span className="font-semibold text-gray-900 truncate">{c.name ?? '—'}</span>
                         </div>
                       </td>
                       <td className="px-3 py-3 align-middle text-center">
-                        <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full whitespace-nowrap">
+                        <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full whitespace-nowrap">
                           {c.totalConversations ?? 0}
                         </span>
                       </td>
@@ -479,6 +514,61 @@ export default function CustomersPage() {
                 })}
               </tbody>
             </table>
+
+            {/* Mobile / tablet card list — all customer fields without a wide horizontal-scroll table */}
+            <div className="lg:hidden divide-y divide-gray-100">
+              {customers.map((c, idx) => {
+                const checked = selectedIds.has(c.id);
+                const custTags = (c.tagsRaw || '').split(';;').filter(Boolean);
+                const convTags = (c.convTagsRaw || '').split(';;').filter(Boolean);
+                const statusCls: Record<string, string> = {
+                  Open: 'bg-green-50 text-green-700 border-green-200',
+                  Escalated: 'bg-amber-50 text-amber-700 border-amber-200',
+                  Closed: 'bg-gray-100 text-gray-500 border-gray-200',
+                };
+                const chip = (t: string, i: number) => {
+                  const [name, color] = t.split('|');
+                  const col = color || '#10b981';
+                  return (
+                    <span key={i} className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border leading-none whitespace-nowrap"
+                      style={{ color: col, borderColor: col + '55', backgroundColor: col + '15' }}>{name}</span>
+                  );
+                };
+                return (
+                  <div key={c.id} onClick={() => (selectMode ? toggleSelect(c.id) : openCustomer(c))}
+                    className={`flex items-start gap-3 px-4 py-3 cursor-pointer transition-colors ${checked ? 'bg-emerald-50' : 'hover:bg-gray-50'}`}>
+                    {selectMode && (
+                      <div className={`mt-0.5 h-5 w-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 ${checked ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300 bg-white'}`}>
+                        {checked && <Check className="h-3.5 w-3.5 text-white" />}
+                      </div>
+                    )}
+                    <div className="h-9 w-9 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                      <span className="text-[11px] font-semibold text-emerald-700">{getAvatar(c.name, c.phone)}</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-gray-900 truncate">{c.name ?? '—'}</span>
+                        {c.lastStatus && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium whitespace-nowrap flex-shrink-0 ${statusCls[c.lastStatus] ?? 'bg-gray-100 text-gray-500 border-gray-200'}`}>{c.lastStatus}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
+                        <span className="tabular-nums">{c.phone}</span>
+                        <span className="text-gray-300">·</span>
+                        <span className="text-emerald-700 font-medium">{c.totalConversations ?? 0} conv</span>
+                      </div>
+                      {(convTags.length > 0 || custTags.length > 0) && (
+                        <div className="flex items-center gap-1 flex-wrap mt-1.5">
+                          {convTags.slice(0, 3).map(chip)}
+                          {custTags.slice(0, 3).map(chip)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            </>
           )}
         </div>
 
@@ -499,8 +589,8 @@ export default function CustomersPage() {
           {/* Detail header */}
           <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-3">
-              <div className="h-11 w-11 rounded-full bg-indigo-100 flex items-center justify-center">
-                <span className="text-sm font-bold text-indigo-700">
+              <div className="h-11 w-11 rounded-full bg-emerald-100 flex items-center justify-center">
+                <span className="text-sm font-bold text-emerald-700">
                   {getAvatar(selected.name, selected.phone)}
                 </span>
               </div>
@@ -530,20 +620,20 @@ export default function CustomersPage() {
                   <div>
                     <label className="text-xs text-gray-500 mb-1 block">Name</label>
                     <input value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
-                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-200" />
                   </div>
                   <div>
                     <label className="text-xs text-gray-500 mb-1 block">Email</label>
                     <input value={editForm.email} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))}
-                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-200" />
                   </div>
                   <div>
                     <label className="text-xs text-gray-500 mb-1 block">Notes</label>
                     <textarea value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} rows={2}
-                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-200 resize-none" />
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-200 resize-none" />
                   </div>
                   <div className="flex gap-2 pt-1">
-                    <button onClick={saveEdit} className="text-sm px-4 py-1.5 bg-indigo-700 text-white rounded-lg hover:bg-indigo-800">Save</button>
+                    <button onClick={saveEdit} className="text-sm px-4 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200">Save</button>
                     <button onClick={() => setEditing(false)} className="text-sm px-4 py-1.5 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50">Cancel</button>
                   </div>
                 </div>
@@ -576,7 +666,7 @@ export default function CustomersPage() {
                 <div className="relative" ref={tagMenuRef}>
                   <button
                     onClick={() => setShowTagMenu(v => !v)}
-                    className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors"
+                    className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 px-2 py-1 rounded-lg hover:bg-emerald-50 transition-colors"
                   >
                     <Plus className="h-3 w-3" /> Add Tag
                   </button>
@@ -634,7 +724,7 @@ export default function CustomersPage() {
             {/* Stats */}
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white rounded-xl border border-gray-100 p-4 text-center">
-                <p className="text-2xl font-bold text-indigo-700">{selected.totalConversations ?? 0}</p>
+                <p className="text-2xl font-bold text-emerald-700">{selected.totalConversations ?? 0}</p>
                 <p className="text-xs text-gray-400 mt-0.5">Total Conversations</p>
               </div>
               <div className="bg-white rounded-xl border border-gray-100 p-4 text-center">
@@ -650,7 +740,7 @@ export default function CustomersPage() {
                   <MessageSquare className="h-4 w-4 text-gray-400" />
                   <h3 className="text-sm font-semibold text-gray-700">Conversation History</h3>
                   {conversations.length > 0 && (
-                    <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-semibold">{conversations.length}</span>
+                    <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-semibold">{conversations.length}</span>
                   )}
                 </div>
               </div>
@@ -668,7 +758,7 @@ export default function CustomersPage() {
                     const tags = conv.tagsRaw
                       ? conv.tagsRaw.split(';;').filter(Boolean).map((t: string) => {
                           const [name, color] = t.split('|');
-                          return { name, color: color || '#6366f1' };
+                          return { name, color: color || '#10b981' };
                         })
                       : [];
 
@@ -689,7 +779,7 @@ export default function CustomersPage() {
                     };
 
                     return (
-                      <div key={conv.id} className="border border-gray-100 rounded-xl p-4 hover:border-indigo-200 hover:bg-indigo-50/20 transition-colors">
+                      <div key={conv.id} className="border border-gray-100 rounded-xl p-4 hover:border-emerald-200 hover:bg-emerald-50/20 transition-colors">
                         {/* Row 1: ID + Status + Tags + Time + View */}
                         <div className="flex items-start justify-between gap-2 mb-2">
                           <div className="flex items-center gap-1.5 flex-wrap">
@@ -710,17 +800,17 @@ export default function CustomersPage() {
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
                             <span className="text-[11px] text-gray-400">{conv.lastMessageAt ? getRelativeTime(conv.lastMessageAt) : ''}</span>
-                            <a href={`/dashboard/conversations?id=${conv.id}`}
-                              className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors whitespace-nowrap">
+                            <Link href={`/dashboard/conversations?id=${conv.id}`}
+                              className="text-[11px] text-emerald-600 hover:text-emerald-800 font-medium px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors whitespace-nowrap">
                               View →
-                            </a>
+                            </Link>
                           </div>
                         </div>
 
                         {/* Summary — shown prominently when available */}
                         {conv.summaryText && (
-                          <div className="mb-2 px-3 py-2 bg-indigo-50 rounded-lg border border-indigo-100">
-                            <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wide mb-0.5">AI Summary</p>
+                          <div className="mb-2 px-3 py-2 bg-emerald-50 rounded-lg border border-emerald-100">
+                            <p className="text-[10px] font-semibold text-emerald-500 uppercase tracking-wide mb-0.5">AI Summary</p>
                             <p className="text-xs text-gray-700 line-clamp-3 leading-relaxed">{conv.summaryText}</p>
                           </div>
                         )}
@@ -738,7 +828,7 @@ export default function CustomersPage() {
                         <div className="flex items-center gap-3 text-[11px] text-gray-400">
                           {conv.assignedUserName && (
                             <span className="flex items-center gap-1">
-                              <span className="inline-flex h-4 w-4 rounded-full bg-indigo-100 text-indigo-700 items-center justify-center font-bold text-[9px]">
+                              <span className="inline-flex h-4 w-4 rounded-full bg-emerald-100 text-emerald-700 items-center justify-center font-bold text-[9px]">
                                 {conv.assignedUserName.charAt(0)}
                               </span>
                               {conv.assignedUserName}

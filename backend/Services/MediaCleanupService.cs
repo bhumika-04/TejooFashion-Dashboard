@@ -80,6 +80,7 @@ public class MediaCleanupService : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var settings = scope.ServiceProvider.GetRequiredService<SystemSettingsRepository>();
         var db       = scope.ServiceProvider.GetRequiredService<DatabaseHelper>();
+        var catalogs = scope.ServiceProvider.GetRequiredService<CatalogRepository>();
 
         var retentionDaysStr = await settings.GetAsync("media.retentionDays") ?? "30";
         var retentionDays    = int.TryParse(retentionDaysStr, out var d) ? d : 30;
@@ -106,6 +107,13 @@ public class MediaCleanupService : BackgroundService
                             || !allDbIds.Contains(convId);  // orphaned (conversation deleted)
 
             if (!shouldDelete) continue;
+
+            // Never delete media a catalog still points to (would break the catalog's images).
+            if (await catalogs.ConversationHasCatalogMediaAsync(convId))
+            {
+                _logger.LogInformation("MediaCleanup: keeping folder for conversation #{Id} — referenced by a catalog.", convId);
+                continue;
+            }
 
             try
             {

@@ -112,7 +112,7 @@ export default function EscalationRuleModal({ open, onOpenChange, rule, onSubmit
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 placeholder="Describe what triggers this rule"
                 rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 disabled={submitting}
               />
             </div>
@@ -126,7 +126,7 @@ export default function EscalationRuleModal({ open, onOpenChange, rule, onSubmit
                 <select
                   value={formData.ruleType}
                   onChange={(e) => setFormData({ ...formData, ruleType: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   disabled={submitting}
                 >
                   <option value="LowConfidence">Low Confidence</option>
@@ -143,7 +143,7 @@ export default function EscalationRuleModal({ open, onOpenChange, rule, onSubmit
                 <select
                   value={formData.priority}
                   onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   disabled={submitting}
                 >
                   <option value="High">High</option>

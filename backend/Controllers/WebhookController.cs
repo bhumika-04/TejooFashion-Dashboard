@@ -79,17 +79,31 @@ public class WebhookController : ControllerBase
 
             // Coexistence echo (smb_message_echoes): a message the business team sent from the
             // WhatsApp mobile app — capture it as an OUTBOUND message so the dashboard shows the
-            // full two-way thread. (API-sent messages arrive as message_api_* and are already stored.)
+            // full two-way thread.
             if (string.Equals(data.Type, "message_echo", StringComparison.OrdinalIgnoreCase))
             {
                 await CaptureEchoAsync(data, sessionId);
                 return Ok(new { status = "echo_captured" });
             }
 
+            // Business-sent via the WhatsApp Business API — INCLUDING replies typed in the Interakt
+            // web dashboard — arrive as message_api_sent (family message_api_*). Capture as an OUTBOUND
+            // message so the dashboard shows the full two-way thread. CaptureEchoAsync dedups on the
+            // provider message id, so replies WE send from this dashboard (stored with their id via
+            // UpdateDeliveryAsync) are skipped rather than duplicated; delivered/read status events
+            // carry no body and are dropped by the content guard inside CaptureEchoAsync.
+            if (!string.IsNullOrEmpty(data.Type) &&
+                data.Type.StartsWith("message_api", StringComparison.OrdinalIgnoreCase))
+            {
+                await CaptureEchoAsync(data, sessionId);
+                return Ok(new { status = "api_message_captured", type = data.Type });
+            }
+
             // Only process incoming customer messages
             if (!string.Equals(data.Type, "message_received", StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogInformation("Ignoring non-customer webhook event: {Type}", data.Type);
+                // Log the raw payload for any unhandled type so a new/unexpected event is easy to diagnose.
+                _logger.LogInformation("Ignoring webhook event {Type} — payload: {Payload}", data.Type, rawBody);
                 return Ok(new { status = "ignored", type = data.Type });
             }
 
@@ -309,6 +323,14 @@ public class WebhookController : ControllerBase
         // as JSON and would otherwise be stored (and shown) as raw blobs.
         var (messageText, normalizedType) = NormalizeInteraktMessage(rawText, messageType);
         messageType = normalizedType;
+
+        // Status-only events (message_api_delivered/read/failed) carry no message body — skip them so we
+        // don't store blank outbound rows. Real echoes / api_sent messages always have text or media.
+        if (string.IsNullOrWhiteSpace(messageText) && string.IsNullOrEmpty(mediaUrl))
+        {
+            _logger.LogInformation("Business-sent event '{Type}' had no content — skipped.", data.Type);
+            return;
+        }
 
         var sp = HttpContext.RequestServices;
         var sessionRepo = sp.GetRequiredService<WhatsAppSessionRepository>();

@@ -8,6 +8,11 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Ensure the web root exists BEFORE the host resolves WebRootPath. On a fresh deploy where
+// wwwroot/ isn't present, IWebHostEnvironment.WebRootPath would be null and media upload/serve/
+// cleanup (which read WebRootPath) would throw. wwwroot holds runtime media only — it is not in git.
+Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, "wwwroot", "uploads", "conversations"));
+
 // Configure detailed logging
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
@@ -26,7 +31,8 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
     {
-        policy.WithOrigins("http://localhost:3000", "http://127.0.0.1:3000")
+        policy.WithOrigins("http://localhost:3000", "http://127.0.0.1:3000",
+                           "https://tejoofashion.vercel.app")
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials();
@@ -106,6 +112,10 @@ builder.Services.AddScoped<MessageRepository>();
 builder.Services.AddScoped<EscalationRepository>();
 builder.Services.AddScoped<EscalationRuleRepository>();
 builder.Services.AddScoped<AiPromptRepository>();
+builder.Services.AddScoped<CatalogRepository>();
+builder.Services.AddScoped<CatalogSendQueueRepository>();
+builder.Services.AddScoped<AiSuggestionRepository>();
+builder.Services.AddScoped<AutoTagService>();
 builder.Services.AddScoped<WebhookLogRepository>();
 builder.Services.AddScoped<ReportRepository>();
 builder.Services.AddScoped<NotificationRepository>();
@@ -135,14 +145,13 @@ builder.Services.AddHostedService<MessageProcessorService>();
 builder.Services.AddHostedService<ConversationAutoCloseService>();
 builder.Services.AddHostedService<EscalationTimeoutService>();
 builder.Services.AddHostedService<ConversationSummaryService>();
+builder.Services.AddHostedService<CatalogSendService>();
+builder.Services.AddHostedService<ConversationRetentionService>();
 
 // Register AI Services
 builder.Services.AddScoped<OpenAiClient>();
 builder.Services.AddSingleton<PromptLoader>(); // Singleton so prompt cache persists across requests
 builder.Services.AddScoped<AiRouterService>();
-
-// Register Logger
-builder.Services.AddScoped<AppLogger>();
 
 var app = builder.Build();
 

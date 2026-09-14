@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Card, CardContent } from '@/components/ui/card';
-import { sessionsApi, usersApi } from '@/services/api';
-import { Phone, Edit, Trash2, CheckCircle, XCircle, Activity, MessageSquare, ArrowUp, Clock, ArrowDown, Search, SlidersHorizontal, Download, Send, X, UserCheck, Copy, AlertTriangle } from 'lucide-react';
+import { sessionsApi, usersApi, dashboardApi } from '@/services/api';
+import { Phone, Edit, Trash2, CheckCircle, MessageSquare, Clock, Search, SlidersHorizontal, Download, Send, X, UserCheck, Copy, AlertTriangle, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import { SessionModal, SessionFormData } from '@/components/modals/SessionModal';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
@@ -19,6 +19,7 @@ export default function SessionsPage() {
 
   const [sessions, setSessions] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
+  const [respSla, setRespSla] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedSession, setSelectedSession] = useState<any>(null);
@@ -63,6 +64,8 @@ export default function SessionsPage() {
   useEffect(() => {
     loadSessions();
     loadUsers();
+    // Real first-response metric (last 7 days, 30-min SLA) — replaces the old hardcoded value.
+    dashboardApi.getResponseSla(7, 30).then(r => setRespSla(r.data)).catch(() => {});
   }, []);
 
   const loadSessions = async () => {
@@ -106,6 +109,8 @@ export default function SessionsPage() {
         metaPhoneNumberId: data.provider === 'Meta' ? data.apiKey : undefined,
         metaAccessToken: data.provider === 'Meta' ? data.apiKey : undefined,
         autoReplyEnabled: data.autoReplyEnabled,
+        aiMode: data.aiMode,
+        slaMinutes: data.slaMinutes,
         isConnected: data.connectionVerified,
       };
 
@@ -144,19 +149,47 @@ export default function SessionsPage() {
 
   // Calculate KPI stats
   const totalSessions = sessions.length;
-  const activeSessions = sessions.filter(s => s.isActive).length;
-  const connectedSessions = sessions.filter(s => s.isConnected).length;
-  const totalMessagesToday = sessions.reduce((sum, s) => sum + (s.messagesToday || 0), 0);
-  const avgResponseTime = 2.5;
+  // "Active" = sessions that actually received a customer (inbound) message today — not the IsActive
+  // config flag (on for all numbers). Idle numbers with no inbound today are not counted as active.
+  const activeSessions = sessions.filter(s => (s.messagesToday || 0) > 0).length;
+  const totalInboundToday = sessions.reduce((sum, s) => sum + (s.messagesToday || 0), 0);
+  const totalOutboundToday = sessions.reduce((sum, s) => sum + (s.outboundToday || 0), 0);
+
+  // Real avg first-response time (customer inbound → first recorded reply), last 7 days.
+  const slaOverall = respSla?.overall;
+  const avgFrtMin: number | null = slaOverall?.avgFirstResponseMinutes ?? null;
+  const slaPct: number | null = slaOverall && slaOverall.responded > 0
+    ? Math.round((slaOverall.metSla / slaOverall.responded) * 100) : null;
+  const fmtDuration = (min: number | null): string => {
+    if (min == null) return '—';
+    if (min < 1) return `${Math.max(1, Math.round(min * 60))}s`;
+    if (min < 60) return `${Math.round(min)}m`;
+    const h = Math.floor(min / 60); const m = Math.round(min % 60);
+    return m ? `${h}h ${m}m` : `${h}h`;
+  };
+
+  // Online = actively receiving — got a customer (inbound) message within the last 24h. This reflects
+  // real activity, not the stored IsConnected flag (which stays on for nearly every number). A number
+  // with no inbound in 24h reads "Offline" (and its Last-inbound shows "Stale"), matching that threshold.
+  const ONLINE_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const isOnline = (s: any): boolean => {
+    const d = parseUTCDate(s.lastInboundAt);
+    return d ? (Date.now() - d.getTime()) < ONLINE_WINDOW_MS : false;
+  };
 
   // Filtered sessions for list
   const filteredSessions = sessions.filter(s => {
     const matchesSearch = !search || s.phoneNumber?.toLowerCase().includes(search.toLowerCase()) || s.assignedUserName?.toLowerCase().includes(search.toLowerCase());
-    const matchesStatus = statusFilter === 'All' || (statusFilter === 'Online' ? s.isConnected : !s.isConnected);
+    const matchesStatus = statusFilter === 'All' || (statusFilter === 'Online' ? isOnline(s) : !isOnline(s));
     return matchesSearch && matchesStatus;
   });
 
-  const ngrokBase = (process.env.NEXT_PUBLIC_NGROK_URL || '').replace(/\/$/, '');
+  // Webhook base = backend origin. Prefer NEXT_PUBLIC_NGROK_URL (local-dev tunnel override),
+  // else derive from NEXT_PUBLIC_API_URL by stripping the trailing /api. Never a bare relative path.
+  const ngrokBase = (
+    process.env.NEXT_PUBLIC_NGROK_URL
+    || (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '')
+  ).replace(/\/$/, '');
   const getWebhookUrl = (session: any) =>
     `${ngrokBase}/api/webhook/${session.provider === 'Meta' ? 'meta' : 'interakt'}?sid=${session.id}`;
 
@@ -167,11 +200,12 @@ export default function SessionsPage() {
 
   const handleExport = () => {
     const rows = [
-      ['Phone Number', 'Provider', 'Status', 'Assigned To', 'Messages Today', 'Auto Reply', 'Webhook URL'],
+      ['Phone Number', 'Provider', 'Status', 'Assigned To', 'Inbound Today', 'Outbound Today', 'First-Response SLA (min)', 'AI Mode', 'Webhook URL'],
       ...filteredSessions.map(s => [
-        s.phoneNumber, s.provider, s.isConnected ? 'Online' : 'Offline',
-        s.assignedUserName || '—', s.messagesToday || 0,
-        s.autoReplyEnabled ? 'Enabled' : 'Disabled',
+        s.phoneNumber, s.provider, isOnline(s) ? 'Online' : 'Offline',
+        s.assignedUserName || '—', s.messagesToday || 0, s.outboundToday || 0,
+        s.slaMinutes ?? 30,
+        s.aiMode ?? 'suggest',
         getWebhookUrl(s),
       ])
     ];
@@ -183,8 +217,11 @@ export default function SessionsPage() {
   };
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 bg-white min-h-screen">
-      {/* KPI Cards */}
+    <div className="px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8 bg-beige min-h-screen">
+      {/* KPI + toolbar block — sticks to the top on desktop so the search/filter stays reachable
+          while scrolling the session list (mobile scrolls normally to avoid pinning tall KPI rows) */}
+      <div className="lg:sticky lg:top-0 z-20 bg-beige pt-4 sm:pt-6 lg:pt-8 pb-2">
+      {/* KPI Cards — 5 cards; last one fills the trailing gap so there's no blank at any width */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6 items-stretch">
         <KPICard index={0}
           title="Total Sessions"
@@ -198,28 +235,30 @@ export default function SessionsPage() {
           value={activeSessions}
           icon={CheckCircle}
           theme="green"
-          subtitleText={`${((activeSessions / totalSessions) * 100 || 0).toFixed(0)}% of total`}
+          subtitleText="Received inbound today"
         />
         <KPICard index={2}
-          title="Connected Sessions"
-          value={connectedSessions}
-          icon={Activity}
-          theme="indigo"
-          subtitleText={`${totalSessions - connectedSessions} offline`}
-        />
-        <KPICard index={3}
-          title="Messages Today"
-          value={totalMessagesToday}
+          title="Inbound Today"
+          value={totalInboundToday}
           icon={MessageSquare}
           theme="amber"
-          subtitleText="Active messaging"
+          subtitleText="Customer messages"
+        />
+        <KPICard index={3}
+          title="Outbound Today"
+          value={totalOutboundToday}
+          icon={Send}
+          theme="cyan"
+          subtitleText="Sent messages"
         />
         <KPICard index={4}
-          title="Avg Response Time"
-          value={`${avgResponseTime}s`}
+          title="Avg First Response"
+          value={fmtDuration(avgFrtMin)}
           icon={Clock}
           theme="purple"
-          subtitleText="18% faster than avg"
+          subtitleText={slaPct != null ? `${slaPct}% within 30m SLA · 7d` : 'Last 7 days'}
+          // Fill the trailing gap: full row on 2-col mobile, spans last 2 of 3 on md, single on xl(5-col)
+          className="col-span-2 xl:col-span-1"
         />
       </div>
 
@@ -233,7 +272,7 @@ export default function SessionsPage() {
             placeholder="Search by phone number or agent name..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder:text-gray-400"
+            className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent placeholder:text-gray-400"
           />
         </div>
 
@@ -243,7 +282,7 @@ export default function SessionsPage() {
             onClick={() => setFilterOpen(v => !v)}
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border rounded-lg transition-all whitespace-nowrap ${
               statusFilter !== 'All'
-                ? 'bg-indigo-700 text-white border-indigo-700'
+                ? 'bg-emerald-100 text-emerald-700 border-emerald-700'
                 : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300 hover:bg-gray-50'
             }`}
           >
@@ -260,7 +299,7 @@ export default function SessionsPage() {
                   key={opt}
                   onClick={() => { setStatusFilter(opt); setFilterOpen(false); }}
                   className={`w-full text-left px-4 py-2 text-sm transition-colors ${
-                    statusFilter === opt ? 'bg-indigo-700 text-white font-medium' : 'text-gray-700 hover:bg-gray-50'
+                    statusFilter === opt ? 'bg-emerald-100 text-emerald-700 font-medium' : 'text-gray-700 hover:bg-gray-50'
                   }`}
                 >
                   {opt}
@@ -281,12 +320,13 @@ export default function SessionsPage() {
 
         {/* CRR badge */}
         {isCRR && (
-          <span className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg whitespace-nowrap">
+          <span className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg whitespace-nowrap">
             <UserCheck className="h-3.5 w-3.5" />
             My Session
           </span>
         )}
       </div>
+      </div>{/* end sticky KPI + toolbar block */}
 
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -330,14 +370,16 @@ export default function SessionsPage() {
                     <p className="text-xs text-gray-400">{session.provider}</p>
                   </div>
                 </div>
-                <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border ${
-                  session.isConnected
+                {(() => { const online = isOnline(session); return (
+                <span title={online ? 'Received a customer message in the last 24h' : 'No inbound in the last 24h'}
+                  className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border ${
+                  online
                     ? 'bg-green-50 text-green-700 border-green-200'
                     : 'bg-gray-100 text-gray-500 border-gray-200'
                 }`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${session.isConnected ? 'bg-green-500 pulse-dot' : 'bg-gray-400'}`} />
-                  {session.isConnected ? 'Online' : 'Offline'}
-                </span>
+                  <span className={`h-1.5 w-1.5 rounded-full ${online ? 'bg-green-500 pulse-dot' : 'bg-gray-400'}`} />
+                  {online ? 'Online' : 'Offline'}
+                </span> ); })()}
               </div>
 
               {/* Details */}
@@ -348,7 +390,15 @@ export default function SessionsPage() {
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-gray-50">
                   <span className="text-gray-400 font-medium">Messages today</span>
-                  <span className="font-semibold text-gray-900">{session.messagesToday || 0}</span>
+                  <span className="flex items-center gap-2 font-semibold">
+                    <span className="inline-flex items-center gap-1 text-amber-600" title="Inbound (customer)">
+                      <ArrowDownLeft className="h-3.5 w-3.5" />{session.messagesToday || 0}
+                    </span>
+                    <span className="text-gray-300">·</span>
+                    <span className="inline-flex items-center gap-1 text-cyan-600" title="Outbound (sent)">
+                      <ArrowUpRight className="h-3.5 w-3.5" />{session.outboundToday || 0}
+                    </span>
+                  </span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-gray-50">
                   <span className="text-gray-400 font-medium">Last inbound</span>
@@ -373,41 +423,37 @@ export default function SessionsPage() {
                   })()}
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-gray-50">
-                  <span className="text-gray-400 font-medium">AI Auto Reply</span>
-                  {!isCRR ? (
-                    <button
-                      onClick={async () => {
-                        try {
-                          await sessionsApi.update(session.id, { autoReplyEnabled: !session.autoReplyEnabled });
-                          setSessions(prev => prev.map(s => s.id === session.id ? { ...s, autoReplyEnabled: !s.autoReplyEnabled } : s));
-                          showToast(`AI auto-reply ${!session.autoReplyEnabled ? 'enabled' : 'disabled'} for ${session.phoneNumber}`, 'success');
-                        } catch {
-                          showToast('Failed to update setting', 'error');
-                        }
-                      }}
-                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-                        session.autoReplyEnabled ? 'bg-green-500' : 'bg-gray-300'
-                      }`}
-                      title={session.autoReplyEnabled ? 'Click to disable AI auto-reply' : 'Click to enable AI auto-reply'}
-                    >
-                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
-                        session.autoReplyEnabled ? 'translate-x-4' : 'translate-x-1'
-                      }`} />
-                    </button>
-                  ) : (
-                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                      session.autoReplyEnabled ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'
-                    }`}>
-                      {session.autoReplyEnabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  )}
+                  <span className="text-gray-400 font-medium">AI Mode</span>
+                  {(() => {
+                    const mode = (session.aiMode ?? 'suggest').toLowerCase();
+                    const cfg = mode === 'auto'
+                      ? { label: 'Auto', cls: 'bg-emerald-100 text-emerald-700', title: 'AI replies to customers directly' }
+                      : mode === 'off'
+                      ? { label: 'Off', cls: 'bg-gray-100 text-gray-500', title: 'AI is off — fully manual' }
+                      : { label: 'Suggest', cls: 'bg-violet-100 text-violet-700', title: 'AI drafts replies for the agent to review' };
+                    return (
+                      <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${cfg.cls}`} title={cfg.title}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${mode === 'off' ? 'bg-gray-400' : mode === 'auto' ? 'bg-emerald-500' : 'bg-violet-500'}`} />
+                        {cfg.label}
+                      </span>
+                    );
+                  })()}
+                </div>
+                {/* First-Response SLA (per number) — edit it on the Escalations page */}
+                <div className="flex justify-between items-center py-1 border-b border-gray-50">
+                  <span className="text-gray-400 font-medium">First-Response SLA</span>
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700"
+                    title="Target time to first reply. Edit it via this session's Edit dialog, or on the Escalations page → First-Response SLA per Number.">
+                    <Clock className="h-3 w-3" />
+                    {session.slaMinutes ?? 30} min
+                  </span>
                 </div>
                 {/* Webhook URL */}
                 <div className="flex justify-between items-center py-1">
                   <span className="text-gray-400 font-medium text-xs">Webhook</span>
                   <button
                     onClick={() => handleCopyWebhook(session)}
-                    className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-medium transition-colors"
+                    className="flex items-center gap-1.5 text-xs text-emerald-600 hover:text-emerald-800 font-medium transition-colors"
                     title={getWebhookUrl(session)}
                   >
                     <Copy className="h-3 w-3" />
@@ -430,8 +476,8 @@ export default function SessionsPage() {
                   </button>
                 )}
                 <button
-                  className="h-9 w-9 flex items-center justify-center rounded-xl bg-indigo-50 text-indigo-600
-                    hover:bg-indigo-100 active:scale-95 transition-all duration-150"
+                  className="h-9 w-9 flex items-center justify-center rounded-xl bg-emerald-50 text-emerald-600
+                    hover:bg-emerald-100 active:scale-95 transition-all duration-150"
                   title="Send test message"
                   onClick={() => { setTestSession(session); setTestPhone(''); setTestMsg('Hello! This is a test message from Tejoo Fashion dashboard.'); }}
                 >
@@ -481,17 +527,17 @@ export default function SessionsPage() {
                 <label className="text-xs font-medium text-gray-600 block mb-1">Recipient Phone *</label>
                 <input value={testPhone} onChange={e => setTestPhone(e.target.value)}
                   placeholder="+91 98765 43210"
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-200" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Message</label>
                 <textarea value={testMsg} onChange={e => setTestMsg(e.target.value)} rows={3}
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-200 resize-none" />
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-200 resize-none" />
               </div>
             </div>
             <div className="flex gap-2 px-5 py-4 border-t border-gray-100">
               <button onClick={handleTestMessage} disabled={testSending}
-                className="flex-1 flex items-center justify-center gap-2 text-sm py-2 bg-indigo-700 text-white rounded-xl hover:bg-indigo-800 transition-colors disabled:opacity-60">
+                className="flex-1 flex items-center justify-center gap-2 text-sm py-2 bg-emerald-100 text-emerald-700 rounded-xl hover:bg-emerald-200 transition-colors disabled:opacity-60">
                 <Send className="h-4 w-4" />
                 {testSending ? 'Sending…' : 'Send Test'}
               </button>

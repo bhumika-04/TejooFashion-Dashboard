@@ -4,12 +4,15 @@ public class EscalationDTO
 {
     public int Id { get; set; }
     public int ConversationId { get; set; }
+    public int EscalatedToUserId { get; set; }
     public string? EscalatedFromUserName { get; set; }
     public string EscalatedToUserName { get; set; } = string.Empty;
     public string? Reason { get; set; }
     public string Priority { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public int EscalationLevel { get; set; } = 1;
     public DateTime EscalatedAt { get; set; }
+    public DateTime? LastEscalatedAt { get; set; }
     public DateTime? ResolvedAt { get; set; }
     public string? ResolutionNotes { get; set; }
 
@@ -32,4 +35,9 @@ public class UpdateEscalationRequest
 {
     public string? Status { get; set; }
     public string? ResolutionNotes { get; set; }
+}
+
+public class ReassignEscalationRequest
+{
+    public int NewUserId { get; set; }
 }

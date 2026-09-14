@@ -10,6 +10,7 @@ public class Message
     public string MessageType { get; set; } = "text"; // text | image | document | template
     public string? Content { get; set; }
     public string? MediaUrl { get; set; }
+    public string? Transcript { get; set; }   // Whisper transcript for inbound voice notes
 
     // Provider Information
     public string? ProviderMessageId { get; set; }

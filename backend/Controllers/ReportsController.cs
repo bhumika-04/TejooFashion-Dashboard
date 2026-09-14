@@ -9,16 +9,20 @@ namespace TejooWhatsApp.Controllers;
 public class ReportsController : ControllerBase
 {
     private readonly ReportRepository _reportRepo;
+    private readonly AiSuggestionRepository _aiSuggestions;
 
-    public ReportsController(ReportRepository reportRepo)
+    public ReportsController(ReportRepository reportRepo, AiSuggestionRepository aiSuggestions)
     {
         _reportRepo = reportRepo;
+        _aiSuggestions = aiSuggestions;
     }
 
+    // from/to are IST calendar dates (yyyy-MM-dd); omitted → today. Scopes the historical
+    // dashboard metrics (conversations, messages, AI rate) to the selected range.
     [HttpGet("dashboard")]
-    public async Task<IActionResult> GetDashboardStats()
+    public async Task<IActionResult> GetDashboardStats([FromQuery] string? from = null, [FromQuery] string? to = null)
     {
-        var stats = await _reportRepo.GetDashboardStatsAsync();
+        var stats = await _reportRepo.GetDashboardStatsAsync(from, to);
         return Ok(stats);
     }
 
@@ -37,9 +41,9 @@ public class ReportsController : ControllerBase
     }
 
     [HttpGet("agent-stats")]
-    public async Task<IActionResult> GetAgentStats()
+    public async Task<IActionResult> GetAgentStats([FromQuery] int days = 36500)
     {
-        var stats = await _reportRepo.GetAgentStatsAsync();
+        var stats = await _reportRepo.GetAgentStatsAsync(days);
         return Ok(stats);
     }
 
@@ -60,6 +64,40 @@ public class ReportsController : ControllerBase
         var stats = await _reportRepo.GetPerformanceStatsAsync(from, now);
         return Ok(stats);
     }
+
+    // AI copilot acceptance analytics: how often CRRs used the AI drafts (as-is / edited / dismissed).
+    [HttpGet("ai-suggestions")]
+    public async Task<IActionResult> GetAiSuggestionStats([FromQuery] string period = "week")
+    {
+        var now = DateTime.UtcNow;
+        var from = period switch
+        {
+            "today" => now.Date,
+            "month" => now.AddDays(-30),
+            _       => now.AddDays(-7)
+        };
+        var stats = await _aiSuggestions.GetAcceptanceStatsAsync(from, now);
+        return Ok(stats);
+    }
+
+    // Per-agent AI-copilot acceptance breakdown.
+    [HttpGet("ai-suggestions/by-agent")]
+    public async Task<IActionResult> GetAiSuggestionsByAgent([FromQuery] string period = "week")
+    {
+        var now = DateTime.UtcNow;
+        var from = period switch { "today" => now.Date, "month" => now.AddDays(-30), _ => now.AddDays(-7) };
+        return Ok(await _aiSuggestions.GetAcceptanceByAgentAsync(from, now));
+    }
+
+    // Customer sentiment analytics (distribution + daily trend) from conversation summaries.
+    [HttpGet("sentiment")]
+    public async Task<IActionResult> GetSentiment([FromQuery] int days = 7)
+        => Ok(await _reportRepo.GetSentimentAnalyticsAsync(days));
+
+    // Daily average first-response time (minutes) trend over the period.
+    [HttpGet("response-time-trend")]
+    public async Task<IActionResult> GetResponseTimeTrend([FromQuery] int days = 7)
+        => Ok(await _reportRepo.GetResponseTimeTrendAsync(days));
 
     // Team KPI trends: current window vs equal-length previous window (real deltas, no hardcoding).
     [HttpGet("performance-summary")]

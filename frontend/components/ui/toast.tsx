@@ -80,9 +80,9 @@ function ToastItem({ toast, onClose }: ToastItemProps) {
   };
 
   const styles = {
-    success: 'bg-gradient-to-r from-green-50 to-emerald-50 border-green-300',
-    error: 'bg-gradient-to-r from-red-50 to-rose-50 border-red-300',
-    info: 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-300',
+    success: 'bg-green-50 border-green-300',
+    error: 'bg-red-50 border-red-300',
+    info: 'bg-blue-50 border-blue-300',
   };
 
   return (

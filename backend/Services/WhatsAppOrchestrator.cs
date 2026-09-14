@@ -22,6 +22,8 @@ public class WhatsAppOrchestrator
     private readonly AiBypassRepository _bypassRepo;
     private readonly TagRepository _tagRepo;
     private readonly ConversationRepository _conversationRepo;
+    private readonly AiSuggestionRepository _suggestionRepo;
+    private readonly TejooWhatsApp.AI.OpenAiClient _openAiClient;
     private readonly string _interaktBaseUrl;
     private readonly string _metaGraphBaseUrl;
     private readonly string _publicBaseUrl; // ngrok/public URL for media files
@@ -41,7 +43,9 @@ public class WhatsAppOrchestrator
         IConfiguration configuration,
         AiBypassRepository bypassRepo,
         TagRepository tagRepo,
-        ConversationRepository conversationRepo)
+        ConversationRepository conversationRepo,
+        AiSuggestionRepository suggestionRepo,
+        TejooWhatsApp.AI.OpenAiClient openAiClient)
     {
         _sessionRepo = sessionRepo;
         _conversationService = conversationService;
@@ -57,9 +61,73 @@ public class WhatsAppOrchestrator
         _bypassRepo = bypassRepo;
         _tagRepo = tagRepo;
         _conversationRepo = conversationRepo;
+        _suggestionRepo = suggestionRepo;
+        _openAiClient = openAiClient;
         _interaktBaseUrl = configuration["ExternalApis:InteraktBaseUrl"] ?? "https://api.interakt.ai";
         _metaGraphBaseUrl = configuration["ExternalApis:MetaGraphBaseUrl"] ?? "https://graph.facebook.com";
         _publicBaseUrl = (configuration["ExternalApis:PublicBaseUrl"] ?? "").TrimEnd('/');
+    }
+
+    /// <summary>
+    /// On-demand AI draft for the copilot. Suggestions are normally created reactively as inbound
+    /// messages arrive; this fills the gap when a CRR opens a chat that is awaiting a reply but has
+    /// no stored draft (e.g. the message arrived before suggest-mode, or via a path that didn't
+    /// generate one). Idempotent: returns the existing pending draft without spending tokens, and
+    /// returns null when there's nothing to suggest — closed, we already replied, AI is off/bypassed
+    /// for the number, or the last message is media with no readable text.
+    /// </summary>
+    public async Task<AiSuggestion?> GenerateSuggestionOnDemandAsync(int conversationId)
+    {
+        var conversation = await _conversationRepo.GetByIdAsync(conversationId);
+        if (conversation == null || string.Equals(conversation.Status, "Closed", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        // Already have a draft ready — hand it back, don't regenerate (no OpenAI call).
+        var existing = await _suggestionRepo.GetPendingAsync(conversationId);
+        if (existing != null) return existing;
+
+        // Respect the number's AI mode: only the copilot ('suggest', the default) drafts on demand.
+        var session = await _sessionRepo.GetByIdAsync(conversation.SessionId);
+        var aiMode = string.IsNullOrWhiteSpace(session?.AiMode) ? "suggest" : session!.AiMode.Trim().ToLowerInvariant();
+        if (aiMode != "suggest") return null;
+
+        // Only suggest when the customer spoke last (we're the ones who owe a reply).
+        var recent = await _messageService.GetRecentMessagesForContextAsync(conversationId, 10);
+        var last = recent.LastOrDefault();
+        if (last == null || !string.Equals(last.Direction, "inbound", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        // Internal/opted-out numbers get no AI.
+        if (await _bypassRepo.IsActiveBypassAsync(conversation.CustomerPhone))
+            return null;
+
+        // Resolve the text to answer: message text, else a voice transcript (transcribe if needed).
+        var text = !string.IsNullOrWhiteSpace(last.Content) ? last.Content : last.Transcript;
+        if (string.IsNullOrWhiteSpace(text)
+            && (last.MessageType == "audio" || last.MessageType == "voice")
+            && !string.IsNullOrEmpty(last.MediaUrl))
+        {
+            text = await TranscribeInboundAudioAsync(last.MediaUrl, last.Id);
+        }
+        if (string.IsNullOrWhiteSpace(text)) return null; // image/video/doc with no caption — manual
+
+        var summary = await _conversationService.GetSummaryAsync(conversationId);
+
+        AiProcessingResult ai;
+        try
+        {
+            ai = await _aiRouter.ProcessMessageAsync(text, recent, summary?.SummaryText);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("On-demand suggestion failed for conversation {Id}: {Error}", conversationId, ex.Message);
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(ai.ResponseText)) return null;
+
+        await _suggestionRepo.CreateSupersedingAsync(conversationId, last.Id, ai.ResponseText, ai.Intent, ai.Confidence);
+        return await _suggestionRepo.GetPendingAsync(conversationId);
     }
 
     public async Task<bool> ProcessIncomingMessageAsync(
@@ -121,7 +189,7 @@ public class WhatsAppOrchestrator
 
             // 3. Save incoming message
             // Media URL from Interakt is a CDN URL with 5-year expiry — store directly, no download needed
-            await _messageService.SaveInboundMessageAsync(
+            var inboundMessage = await _messageService.SaveInboundMessageAsync(
                 conversation.Id,
                 messageContent,
                 messageType,
@@ -150,63 +218,54 @@ public class WhatsAppOrchestrator
             }
 
             // 3a-1. Internal team data-dump (TF#### reports / "CRR/Whatsapp Name" notes) — not a customer
-            //       query. Tag it and skip AI entirely so it never gets an auto-reply.
+            //       query. Skip AI entirely so it never gets an auto-reply.
             if (AiHeuristics.IsInternalReport(messageContent))
             {
-                await ApplyAutoTagAsync(conversation.Id, "Internal");
                 await LogWebhookAsync(provider, "Internal report message — saved, AI skipped.", true);
                 return true;
             }
 
-            // 3a-2. Fast negativity flag (keyword-based, free + instant) — raise priority and tag the
-            //       conversation as a Complaint so angry customers surface immediately.
+            // 3a-2. Fast negativity flag (keyword-based, free + instant) — raise priority so angry
+            //       customers surface immediately. (Tagging is handled by AutoTagService against the
+            //       admin-managed taxonomy — the single source of auto tags, so we don't tag here.)
             if (AiHeuristics.LooksNegative(messageContent))
-            {
                 await _conversationRepo.UpdatePriorityAsync(conversation.Id, "High");
-                await ApplyAutoTagAsync(conversation.Id, "Complaint");
+
+            // AI behaviour for this number: off | suggest | auto (default 'suggest').
+            //   off     → capture only; a human handles everything.
+            //   suggest → AI drafts a reply for the assigned CRR to Send/Edit/Dismiss (nothing auto-sent).
+            //   auto    → AI sends directly (legacy path, gated by the confidence threshold).
+            var aiMode = string.IsNullOrWhiteSpace(session.AiMode) ? "suggest" : session.AiMode.Trim().ToLowerInvariant();
+
+            if (aiMode == "off")
+            {
+                await LogWebhookAsync(provider, "Message saved. AI mode = off.", true);
+                return true;
             }
 
-            // 3a-3. Rule-based intent tag (free, no LLM) — applies even when AI auto-reply is off, so
-            //        clearly-worded messages still get categorized. The LLM-intent tag (6b) refines this
-            //        when auto-reply is enabled.
-            var ruleTag = AiHeuristics.IntentToTag(AiHeuristics.QuickIntent(messageContent));
-            if (ruleTag != null) await ApplyAutoTagAsync(conversation.Id, ruleTag);
-
-            // 3b. Media messages (image/video/audio/document) — acknowledge and route to human
-            if (messageType != "text" && session.AutoReplyEnabled)
+            // 3b. Non-text media.
+            //   audio/voice     → transcribe (Whisper) and treat the transcript as the message text.
+            //   image/video/doc → AI can't read them; leave for manual handling.
+            var effectiveText = messageContent;
+            if (messageType != "text")
             {
-                var ackText = messageType switch
+                if ((messageType == "audio" || messageType == "voice") && !string.IsNullOrEmpty(mediaUrl))
                 {
-                    "image"    => "Thank you for sharing the image! Our team will review it and get back to you shortly. Could you also tell us what product you are looking for?",
-                    "video"    => "Thank you for sharing the video! Our team will review it. Could you tell us what you need?",
-                    "audio"    => "Thank you for your voice message! Our team will listen to it and respond shortly.",
-                    "document" => "Thank you for sharing the document! Our team will review it and respond shortly.",
-                    _          => "Thank you for sharing! Our team will review and respond shortly.",
-                };
-
-                await _messageService.SaveOutboundMessageAsync(
-                    conversation.Id, ackText, isAiGenerated: true);
-
-                await SendWhatsAppMessageAsync(session, customerPhone, ackText, provider);
-
-                var nextUser = await _escalationService.GetNextEscalationUserAsync(conversation.AssignedUserId);
-                if (nextUser != null)
-                {
-                    await _escalationService.CreateEscalationAsync(
-                        conversation.Id, nextUser.Id, null,
-                        $"Media message received ({messageType}) — needs human review", "Normal",
-                        escalationLevel: EscalationService.LevelForRole(nextUser.Role));
+                    var transcript = await TranscribeInboundAudioAsync(mediaUrl, inboundMessage?.Id);
+                    if (string.IsNullOrWhiteSpace(transcript))
+                    {
+                        await LogWebhookAsync(provider, "Voice note could not be transcribed; left for manual handling.", true);
+                        return true;
+                    }
+                    effectiveText = transcript;
+                    _logger.LogInformation("Voice note transcribed for conversation {Id}: \"{Preview}\"",
+                        conversation.Id, transcript.Length > 60 ? transcript[..60] + "…" : transcript);
                 }
-
-                await LogWebhookAsync(provider, $"Media message ({messageType}) acknowledged and routed to agent.", true);
-                return true;
-            }
-
-            // 4. Check if AI auto-reply is enabled
-            if (!session.AutoReplyEnabled)
-            {
-                await LogWebhookAsync(provider, "Message saved. Auto-reply disabled.", true);
-                return true;
+                else
+                {
+                    await LogWebhookAsync(provider, $"Message saved. {messageType} left for manual handling.", true);
+                    return true;
+                }
             }
 
             // 4b. Check AI bypass list — internal team numbers and opted-out customers
@@ -217,22 +276,24 @@ public class WhatsAppOrchestrator
                 return true;
             }
 
-            // 4a. Check business hours — skip AI reply outside configured window
-            if (!await IsWithinBusinessHoursAsync())
+            // 4a. Business hours gate applies to AUTO send only; in suggest mode we still draft a
+            //     reply so it's ready for the CRR when they return.
+            if (aiMode == "auto" && !await IsWithinBusinessHoursAsync())
             {
                 _logger.LogDebug("Outside business hours — skipping AI auto-reply for conversation {Id}.", conversation.Id);
                 await LogWebhookAsync(provider, "Message saved. Outside business hours.", true);
                 return true;
             }
 
-            // 5. Get conversation context (recent messages)
+            // 5. Get conversation context (recent messages + the running summary for long-term memory)
             var recentMessages = await _messageService.GetRecentMessagesForContextAsync(conversation.Id, 10);
+            var convSummary = await _conversationService.GetSummaryAsync(conversation.Id);
 
             // 6. Process through AI router (with timeout handled inside OpenAiClient)
             AiProcessingResult aiResponse;
             try
             {
-                aiResponse = await _aiRouter.ProcessMessageAsync(messageContent, recentMessages);
+                aiResponse = await _aiRouter.ProcessMessageAsync(effectiveText, recentMessages, convSummary?.SummaryText);
             }
             catch (Exception aiEx)
             {
@@ -259,12 +320,37 @@ public class WhatsAppOrchestrator
                 return true;
             }
 
-            // 6b. Auto-tag the conversation from the detected intent (reuses the router intent — no extra AI cost)
-            var intentTag = AiHeuristics.IntentToTag(aiResponse.Intent);
-            if (intentTag != null) await ApplyAutoTagAsync(conversation.Id, intentTag);
+            // 6b. Conversation tagging is handled by AutoTagService (admin taxonomy), not here.
 
-            // 7. Check if escalation is needed
-            if (aiResponse.ShouldEscalate || (aiResponse.Confidence.HasValue && aiResponse.Confidence < 0.5m))
+            // 6c. SUGGEST mode: store the AI draft for the assigned CRR to Send/Edit/Dismiss.
+            //     Nothing is sent to the customer, and escalation is left to rules + SLA timers
+            //     (no confidence-based auto-escalation here).
+            if (aiMode == "suggest")
+            {
+                if (!string.IsNullOrWhiteSpace(aiResponse.ResponseText))
+                {
+                    await _suggestionRepo.CreateSupersedingAsync(
+                        conversation.Id, null, aiResponse.ResponseText, aiResponse.Intent, aiResponse.Confidence);
+                    await LogWebhookAsync(provider, "AI draft prepared for CRR review (suggest mode).", true);
+                }
+                else
+                {
+                    await LogWebhookAsync(provider, "AI produced no draft; left for manual handling.", true);
+                }
+                return true;
+            }
+
+            // 7. Check if escalation is needed — honour the admin-configured Escalation Policy
+            //    (escalation.mode + escalation.confidenceThreshold from the Escalations page),
+            //    instead of a hardcoded 50%.
+            var escMode = (await _settings.GetAsync("escalation.mode")) ?? "auto";
+            var thresholdPct = int.TryParse(await _settings.GetAsync("escalation.confidenceThreshold"), out var tp) ? tp : 50;
+            var confidenceThreshold = thresholdPct / 100m;
+            // 'manual' mode: AI never auto-escalates on low confidence (humans trigger it);
+            // 'auto'/'hybrid': escalate when confidence is below the threshold.
+            // An explicit AI escalation request (ShouldEscalate) is always honoured.
+            var lowConfidence = aiResponse.Confidence.HasValue && aiResponse.Confidence < confidenceThreshold;
+            if (aiResponse.ShouldEscalate || (escMode != "manual" && lowConfidence))
             {
                 // Acknowledge the customer so they aren't left in silence while a human picks this up.
                 const string escalateAck = "Thank you for your message! Our team will look into this and get back to you shortly.";
@@ -395,25 +481,39 @@ public class WhatsAppOrchestrator
     }
 
     /// <summary>Adds a conversation tag (creating it if needed). Best-effort — never breaks message processing.</summary>
-    private async Task ApplyAutoTagAsync(int conversationId, string tagName)
-    {
-        try
-        {
-            var tagId = await _tagRepo.GetOrCreateByNameAsync(tagName, "conversation", AiHeuristics.TagColor(tagName));
-            await _tagRepo.AddToConversationAsync(conversationId, tagId, null);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Auto-tag '{Tag}' failed for conversation {Id}", tagName, conversationId);
-        }
-    }
-
     /// <summary>
     /// Converts a locally-hosted media URL (relative "/uploads/..." or an absolute
     /// http://localhost / 127.0.0.1 / [::1] URL) into a publicly reachable URL using the
     /// configured PublicBaseUrl, so Interakt/Meta can actually download the file.
     /// URLs that are already remote (e.g. Interakt CDN links when forwarding) are left untouched.
     /// </summary>
+    /// <summary>Download an inbound voice note and transcribe it via Whisper; persists the transcript
+    /// on the message so the CRR can read it. Returns null on any failure (caller falls back to manual).</summary>
+    private async Task<string?> TranscribeInboundAudioAsync(string mediaUrl, int? messageId)
+    {
+        try
+        {
+            var url = mediaUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? mediaUrl
+                : $"{_publicBaseUrl}{mediaUrl}";
+            var bytes = await _httpClient.GetByteArrayAsync(url);
+
+            var path = url.Split('?')[0];
+            var dot = path.LastIndexOf('.');
+            var ext = (dot > 0 && path.Length - dot <= 5) ? path[dot..] : ".ogg";
+
+            var transcript = await _openAiClient.TranscribeAudioAsync(bytes, "audio" + ext);
+            if (!string.IsNullOrWhiteSpace(transcript) && messageId.HasValue)
+                await _messageRepo.SetTranscriptAsync(messageId.Value, transcript);
+            return transcript;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Voice-note transcription failed for {Url}", mediaUrl);
+            return null;
+        }
+    }
+
     private string? ToPublicMediaUrl(string? mediaUrl)
     {
         if (string.IsNullOrEmpty(mediaUrl) || string.IsNullOrEmpty(_publicBaseUrl))

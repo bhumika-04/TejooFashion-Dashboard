@@ -6,12 +6,15 @@ import { LogOut, ChevronDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { NotificationBell } from '@/components/layout/NotificationBell';
+import { OverviewRangeFilter } from '@/components/layout/OverviewRangeFilter';
 
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard/overview': 'Overview',
   '/dashboard/sessions': 'Sessions',
   '/dashboard/conversations': 'Conversations',
   '/dashboard/customers': 'Customers',
+  '/dashboard/gallery': 'Gallery',
+  '/dashboard/system': 'System Health',
   '/dashboard/escalations': 'Escalations',
   '/dashboard/reports': 'Reports & Analytics',
   '/dashboard/teams': 'Teams',
@@ -82,11 +85,16 @@ export default function Header() {
   };
 
   return (
-    <header className="hidden lg:flex relative z-40 h-16 items-center justify-between px-6 bg-white border-b border-gray-100 shadow-sm animate-fade-in">
+    <header className="hidden lg:flex relative z-40 h-16 items-center justify-between px-6 bg-beige/80 backdrop-blur-sm border-b border-beige-200 shadow-sm animate-fade-in">
       {/* Page title */}
       <h1 className="text-lg font-bold text-gray-900">{pageTitle}</h1>
 
       <div className="flex items-center gap-4">
+        {/* Page-wide date filter (Overview / Reports / Performance) — each initialises to its own default */}
+        {pathname === '/dashboard/overview' && <OverviewRangeFilter />}
+        {pathname === '/dashboard/reports' && <OverviewRangeFilter initial="This Week" />}
+        {pathname === '/dashboard/performance' && <OverviewRangeFilter initial="Today" />}
+
         {/* Notification Bell — real API, polling, mark-as-read */}
         <NotificationBell />
 
@@ -98,10 +106,10 @@ export default function Header() {
           >
             <div
               onClick={e => { e.stopPropagation(); router.push('/dashboard/settings'); }}
-              className="h-9 w-9 rounded-full bg-slate-700 flex items-center justify-center hover:ring-2 hover:ring-indigo-400 transition-all cursor-pointer"
+              className="h-9 w-9 rounded-full bg-slate-200 flex items-center justify-center hover:ring-2 hover:ring-emerald-400 transition-all cursor-pointer"
               title="Profile Settings"
             >
-              <span className="text-sm font-bold text-white">{currentUser.initials}</span>
+              <span className="text-sm font-bold text-slate-700">{currentUser.initials}</span>
             </div>
             <div className="text-left">
               <p className="text-sm font-semibold text-gray-900">{currentUser.fullName}</p>

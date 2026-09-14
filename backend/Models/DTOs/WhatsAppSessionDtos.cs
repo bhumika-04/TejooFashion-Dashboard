@@ -11,7 +11,10 @@ public class WhatsAppSessionDTO
     public bool IsConnected { get; set; }
     public bool IsActive { get; set; }
     public bool AutoReplyEnabled { get; set; }
-    public int MessagesToday { get; set; }
+    public string AiMode { get; set; } = "suggest";   // off | suggest | auto
+    public int SlaMinutes { get; set; }
+    public int MessagesToday { get; set; }   // inbound (customer) messages today
+    public int OutboundToday { get; set; }   // outbound messages today
     public DateTime? LastActiveAt { get; set; }
     public DateTime? LastInboundAt { get; set; }   // newest inbound message — drives the "receiving / stale" indicator
     public DateTime CreatedAt { get; set; }
@@ -35,6 +38,8 @@ public class UpdateSessionRequest
     public bool? IsActive { get; set; }
     public bool? IsConnected { get; set; }
     public bool? AutoReplyEnabled { get; set; }
+    public string? AiMode { get; set; }   // off | suggest | auto
+    public int? SlaMinutes { get; set; }
     public string? InteraktApiKey { get; set; }
     public string? MetaPhoneNumberId { get; set; }
     public string? MetaAccessToken { get; set; }

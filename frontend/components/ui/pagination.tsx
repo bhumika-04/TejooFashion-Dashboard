@@ -33,9 +33,9 @@ export function Pagination({ page, totalPages, onChange, className, summary }: P
   }
 
   return (
-    <div className={`flex items-center justify-between gap-3 px-4 py-3 border-t border-gray-100 ${className ?? ''}`}>
+    <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-3 border-t border-gray-100 ${className ?? ''}`}>
       <span className="text-xs text-gray-500 truncate">{summary ?? `Page ${page} of ${totalPages}`}</span>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 flex-wrap justify-center sm:justify-end">
         <button
           disabled={page === 1}
           onClick={() => onChange(page - 1)}
@@ -52,7 +52,7 @@ export function Pagination({ page, totalPages, onChange, className, summary }: P
               key={it}
               onClick={() => onChange(it)}
               className={`min-w-[32px] h-8 px-2 rounded-lg text-sm font-medium transition-colors ${
-                it === page ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                it === page ? 'bg-emerald-100 text-emerald-700' : 'text-gray-600 hover:bg-gray-100'
               }`}
             >
               {it}

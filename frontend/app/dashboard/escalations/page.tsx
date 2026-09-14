@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { escalationsApi, escalationRulesApi, settingsApi, aiPromptsApi, aiBypassApi, teamEscalationPoliciesApi, usersApi } from '@/services/api';
-import { AlertTriangle, CheckCircle, Clock, ArrowUp, ArrowDown, TrendingUp, Settings, Edit, Trash2, Bell, Zap, BrainCircuit, ShieldOff, Plus, Upload, X, Eye, EyeOff, ToggleLeft, ToggleRight, Phone, Users, ExternalLink, RefreshCw, UserCheck, ChevronDown, Filter, Search } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Clock, TrendingUp, Settings, Edit, Trash2, Bell, Zap, BrainCircuit, ShieldOff, Plus, Upload, Eye, EyeOff, ToggleLeft, ToggleRight, Users, ExternalLink, RefreshCw, UserCheck, ChevronDown, Search, Tag as TagIcon } from 'lucide-react';
+import AutoTagManager from '@/components/AutoTagManager';
 import { useRouter } from 'next/navigation';
 import { FAB } from '@/components/ui/fab';
 import { formatDate } from '@/lib/utils';
@@ -36,7 +36,7 @@ export default function EscalationsPage() {
   const { showToast } = useToast();
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<'escalations' | 'prompts' | 'bypass'>('escalations');
+  const [activeTab, setActiveTab] = useState<'escalations' | 'prompts' | 'bypass' | 'autotags'>('escalations');
 
   // AI Prompts tab state
   const [prompts, setPrompts] = useState<any[]>([]);
@@ -81,7 +81,6 @@ export default function EscalationsPage() {
   const [savingNote, setSavingNote] = useState<number | null>(null);
   const [reassignEscId, setReassignEscId] = useState<number | null>(null);
   const [markingInProgress, setMarkingInProgress] = useState<number | null>(null);
-  const [autoRefreshInterval, setAutoRefreshInterval] = useState<NodeJS.Timeout | null>(null);
 
   // Team Escalation Policies state
   const [teamPolicies, setTeamPolicies] = useState<any[]>([]);
@@ -117,7 +116,6 @@ export default function EscalationsPage() {
     usersApi.getAll().then(r => setUsers(r.data ?? [])).catch(() => {});
     // Auto-refresh escalations every 30s
     const interval = setInterval(() => loadEscalations(), 30_000);
-    setAutoRefreshInterval(interval);
     return () => clearInterval(interval);
   }, []);
 
@@ -373,8 +371,7 @@ export default function EscalationsPage() {
   const handleMarkInProgress = async (esc: any) => {
     setMarkingInProgress(esc.id);
     try {
-      await escalationsApi.create({ conversationId: esc.conversationId, escalatedToUserId: esc.escalatedToUserId, reason: esc.reason, priority: esc.priority });
-      // Just reload — backend resolve/update handles status transitions
+      await escalationsApi.updateStatus(esc.id, 'InProgress');
       await loadEscalations();
       showToast('Marked as In Progress', 'success');
     } catch { showToast('Failed to update', 'error'); }
@@ -383,10 +380,10 @@ export default function EscalationsPage() {
 
   const handleReassign = async (escId: number, newUserId: number, newUserName: string) => {
     try {
-      // Create a new escalation to the new user and resolve the old one conceptually
-      showToast(`Reassigned to ${newUserName}`, 'success');
+      await escalationsApi.reassign(escId, newUserId);
       setReassignEscId(null);
       await loadEscalations();
+      showToast(`Reassigned to ${newUserName}`, 'success');
     } catch { showToast('Failed to reassign', 'error'); }
   };
 
@@ -429,7 +426,9 @@ export default function EscalationsPage() {
 
   const getSlaInfo = (esc: any) => {
     if (esc.status === 'Resolved') return null;
-    const policy = teamPolicies.find((p: any) => p.policy);
+    // Prefer an active escalation chain; fall back to any configured policy.
+    // (Single-team setups resolve unambiguously; the backend timeout service is the source of truth per team.)
+    const policy = teamPolicies.find((p: any) => p.policy?.isActive) ?? teamPolicies.find((p: any) => p.policy);
     if (!policy) return null;
     const level = esc.escalationLevel ?? 1;
     const timeout = level === 1 ? policy.policy.crrTimeoutMinutes
@@ -482,7 +481,7 @@ export default function EscalationsPage() {
   const INTENT_COLORS: Record<string, string> = {
     router:              'bg-slate-100 text-slate-700',
     general_query:       'bg-blue-100 text-blue-700',
-    follow_up:           'bg-indigo-100 text-indigo-700',
+    follow_up:           'bg-emerald-100 text-emerald-700',
     order_status:        'bg-green-100 text-green-700',
     payment_outstanding: 'bg-amber-100 text-amber-700',
     dispatch_info:       'bg-orange-100 text-orange-700',
@@ -500,32 +499,19 @@ export default function EscalationsPage() {
   };
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 bg-white min-h-screen">
+    <div className="p-4 sm:p-6 lg:p-8 bg-beige min-h-screen">
 
-      {/* Tab Bar */}
-      <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit">
-        {([
-          { key: 'escalations', label: 'Escalations',     icon: AlertTriangle },
-          { key: 'prompts',     label: 'AI Prompts',      icon: BrainCircuit  },
-          { key: 'bypass',      label: 'Bypass Numbers',  icon: ShieldOff     },
-        ] as const).map(({ key, label, icon: Icon }) => (
-          <button key={key} onClick={() => setActiveTab(key)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              activeTab === key ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-            }`}>
-            <Icon className="h-4 w-4" />
-            {label}
-          </button>
-        ))}
-      </div>
+
+      {/* ── AUTO-TAGS TAB ────────────────────────────────────── */}
+      {activeTab === 'autotags' && <AutoTagManager />}
 
       {/* ── AI PROMPTS TAB ───────────────────────────────────── */}
       {activeTab === 'prompts' && (
         <div className="space-y-4">
           {/* Test AI Reply — runs the real router→specialist pipeline; nothing is sent */}
-          <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 shadow-sm p-4">
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 shadow-sm p-4">
             <div className="flex items-center gap-2 mb-2.5">
-              <BrainCircuit className="h-4 w-4 text-indigo-600" />
+              <BrainCircuit className="h-4 w-4 text-emerald-600" />
               <h3 className="text-sm font-semibold text-gray-800">Test AI Reply</h3>
               <span className="text-[11px] text-gray-400">preview only — nothing is sent to the customer</span>
             </div>
@@ -535,12 +521,12 @@ export default function EscalationsPage() {
                 onChange={e => setTestMessage(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') runAiTest(); }}
                 placeholder="Type a customer message, e.g. What is the wholesale price per piece?"
-                className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400"
+                className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400"
               />
               <button
                 disabled={!testMessage.trim() || testLoading}
                 onClick={runAiTest}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition disabled:opacity-50"
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 active:scale-95 transition disabled:opacity-50"
               >
                 {testLoading ? 'Running…' : 'Test'}
               </button>
@@ -605,7 +591,7 @@ export default function EscalationsPage() {
                       {prompt.isActive ? 'Active' : 'Inactive'}
                     </button>
                     <button onClick={() => { setEditingPrompt(prompt); setEditingText(prompt.systemPrompt ?? ''); setEditingDesc(prompt.description ?? ''); }}
-                      className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-colors">
+                      className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors">
                       <Edit className="h-3.5 w-3.5" /> Edit
                     </button>
                   </div>
@@ -624,25 +610,25 @@ export default function EscalationsPage() {
                 )}
                 {/* Inline editor */}
                 {editingPrompt?.id === prompt.id && (
-                  <div className="mx-5 mb-4 border border-indigo-200 rounded-xl overflow-hidden">
-                    <div className="bg-indigo-50 px-4 py-2 border-b border-indigo-100">
-                      <p className="text-xs font-semibold text-indigo-700">Editing: {INTENT_LABEL[prompt.promptKey]}</p>
+                  <div className="mx-5 mb-4 border border-emerald-200 rounded-xl overflow-hidden">
+                    <div className="bg-emerald-50 px-4 py-2 border-b border-emerald-100">
+                      <p className="text-xs font-semibold text-emerald-700">Editing: {INTENT_LABEL[prompt.promptKey]}</p>
                     </div>
                     <div className="p-4 space-y-3 bg-white">
                       <div>
                         <label className="text-xs font-medium text-gray-500 block mb-1">Description</label>
                         <input value={editingDesc} onChange={e => setEditingDesc(e.target.value)}
-                          className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                          className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-300" />
                       </div>
                       <div>
                         <label className="text-xs font-medium text-gray-500 block mb-1">System Prompt</label>
                         <textarea value={editingText} onChange={e => setEditingText(e.target.value)}
                           rows={18}
-                          className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono resize-y" />
+                          className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-300 font-mono resize-y" />
                       </div>
                       <div className="flex gap-2 pt-1">
                         <button onClick={handleSavePrompt} disabled={promptSaving}
-                          className="px-4 py-2 text-sm bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 disabled:opacity-50">
+                          className="px-4 py-2 text-sm bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 disabled:opacity-50">
                           {promptSaving ? 'Saving…' : 'Save Prompt'}
                         </button>
                         <button onClick={() => setEditingPrompt(null)}
@@ -668,31 +654,31 @@ export default function EscalationsPage() {
           <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-                <Plus className="h-4 w-4 text-indigo-600" /> Add Number
+                <Plus className="h-4 w-4 text-emerald-600" /> Add Number
               </h3>
               <button onClick={() => setShowBulkPanel(v => !v)}
-                className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 px-3 py-1.5 border border-indigo-200 rounded-lg hover:bg-indigo-50">
+                className="flex items-center gap-1.5 text-xs text-emerald-600 hover:text-emerald-800 px-3 py-1.5 border border-emerald-200 rounded-lg hover:bg-emerald-50">
                 <Upload className="h-3.5 w-3.5" /> Bulk Upload
               </button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <input value={bypassPhone} onChange={e => setBypassPhone(e.target.value)}
                 placeholder="+91 98765 43210" onKeyDown={e => e.key === 'Enter' && handleAddBypass()}
-                className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-300" />
               <input value={bypassName} onChange={e => setBypassName(e.target.value)}
                 placeholder="Name (optional)"
-                className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-300" />
               <input value={bypassReason} onChange={e => setBypassReason(e.target.value)}
                 placeholder="Reason (optional)"
-                className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-300" />
               <div className="flex gap-2">
                 <select value={bypassType} onChange={e => setBypassType(e.target.value as any)}
-                  className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white">
+                  className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-300 bg-white">
                   <option value="customer">Customer</option>
                   <option value="internal">Internal Team</option>
                 </select>
                 <button onClick={handleAddBypass} disabled={bypassAdding}
-                  className="px-4 py-2 bg-indigo-700 text-white text-sm rounded-lg hover:bg-indigo-800 disabled:opacity-50 whitespace-nowrap">
+                  className="px-4 py-2 bg-emerald-100 text-emerald-700 text-sm rounded-lg hover:bg-emerald-200 disabled:opacity-50 whitespace-nowrap">
                   {bypassAdding ? '…' : 'Add'}
                 </button>
               </div>
@@ -706,10 +692,10 @@ export default function EscalationsPage() {
                 </p>
                 <textarea value={bulkText} onChange={e => setBulkText(e.target.value)}
                   rows={6} placeholder={'+919876543210\n+918800061841, Rajeev Kumar, internal\n+917000090823, VIP Customer, customer'}
-                  className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono resize-none" />
+                  className="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-300 font-mono resize-none" />
                 <div className="flex gap-2">
                   <button onClick={handleBulkUpload} disabled={bulkUploading}
-                    className="px-4 py-2 text-sm bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 disabled:opacity-50">
+                    className="px-4 py-2 text-sm bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 disabled:opacity-50">
                     {bulkUploading ? 'Uploading…' : 'Upload All'}
                   </button>
                   <button onClick={() => setShowBulkPanel(false)}
@@ -729,7 +715,7 @@ export default function EscalationsPage() {
               </h3>
               <div className="flex gap-3 text-xs text-gray-400">
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" /> Customer</span>
-                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-indigo-400 inline-block" /> Internal</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" /> Internal</span>
               </div>
             </div>
             {bypassLoading ? (
@@ -757,7 +743,7 @@ export default function EscalationsPage() {
                     <tr key={item.id} className={`hover:bg-gray-50/50 ${!item.isActive ? 'opacity-50' : ''}`}>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${item.type === 'internal' ? 'bg-indigo-400' : 'bg-orange-400'}`} />
+                          <div className={`w-2 h-2 rounded-full ${item.type === 'internal' ? 'bg-emerald-400' : 'bg-orange-400'}`} />
                           <span className="font-mono text-sm font-medium text-gray-900">{item.phone}</span>
                         </div>
                       </td>
@@ -765,7 +751,7 @@ export default function EscalationsPage() {
                       <td className="px-4 py-3 text-gray-400 text-xs">{item.reason || '—'}</td>
                       <td className="px-4 py-3 text-center">
                         <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                          item.type === 'internal' ? 'bg-indigo-100 text-indigo-700' : 'bg-orange-100 text-orange-700'
+                          item.type === 'internal' ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'
                         }`}>
                           {item.type === 'internal' ? 'Internal' : 'Customer'}
                         </span>
@@ -807,7 +793,7 @@ export default function EscalationsPage() {
         <KPICard index={3} title="Resolved Today" value={resolvedToday}
           icon={CheckCircle} theme="green" subtitleText="Closed in last 24 hours" />
         <KPICard index={4} title="Avg Resolution" value={`${avgResolutionTime}m`}
-          icon={Clock} theme="indigo" subtitleText="Minutes to resolve" />
+          icon={Clock} theme="emerald" subtitleText="Minutes to resolve" />
         <KPICard index={5} title="High Priority" value={highPriorityEscalations}
           icon={Zap} theme="rose" subtitleText="Needs immediate attention" />
       </div>
@@ -833,21 +819,21 @@ export default function EscalationsPage() {
                 <Button
                   variant={escalationMode === 'auto' ? 'default' : 'outline'}
                   onClick={() => setEscalationMode('auto')}
-                  className={escalationMode === 'auto' ? 'bg-indigo-700 hover:bg-indigo-800' : ''}
+                  className={escalationMode === 'auto' ? 'bg-emerald-200 hover:bg-emerald-300 font-semibold' : ''}
                 >
                   Auto
                 </Button>
                 <Button
                   variant={escalationMode === 'manual' ? 'default' : 'outline'}
                   onClick={() => setEscalationMode('manual')}
-                  className={escalationMode === 'manual' ? 'bg-indigo-700 hover:bg-indigo-800' : ''}
+                  className={escalationMode === 'manual' ? 'bg-emerald-200 hover:bg-emerald-300 font-semibold' : ''}
                 >
                   Manual
                 </Button>
                 <Button
                   variant={escalationMode === 'hybrid' ? 'default' : 'outline'}
                   onClick={() => setEscalationMode('hybrid')}
-                  className={escalationMode === 'hybrid' ? 'bg-indigo-700 hover:bg-indigo-800' : ''}
+                  className={escalationMode === 'hybrid' ? 'bg-emerald-200 hover:bg-emerald-300 font-semibold' : ''}
                 >
                   Hybrid
                 </Button>
@@ -865,7 +851,7 @@ export default function EscalationsPage() {
                 <label className="text-sm font-medium text-gray-700">
                   Global AI Confidence Threshold
                 </label>
-                <span className="text-2xl font-bold text-indigo-700">{confidenceThreshold}%</span>
+                <span className="text-2xl font-bold text-emerald-700">{confidenceThreshold}%</span>
               </div>
               <input
                 type="range"
@@ -873,7 +859,7 @@ export default function EscalationsPage() {
                 max="100"
                 value={confidenceThreshold}
                 onChange={(e) => setConfidenceThreshold(parseInt(e.target.value))}
-                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
               />
               <div className="flex justify-between text-xs text-gray-500 mt-2">
                 <span>0%</span>
@@ -889,7 +875,7 @@ export default function EscalationsPage() {
               <Button
                 onClick={savePolicy}
                 disabled={policySaving || policyLoading}
-                className="bg-indigo-700 hover:bg-indigo-800 text-white text-sm px-5"
+                className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 text-sm px-5"
               >
                 {policySaving ? 'Saving…' : 'Save Policy'}
               </Button>
@@ -949,7 +935,7 @@ export default function EscalationsPage() {
                           {rule.priority}
                         </span>
                         {rule.ruleType && rule.ruleType !== 'Custom' && (
-                          <span className="text-xs font-medium px-2 py-0.5 rounded-full border bg-indigo-50 text-indigo-700 border-indigo-200">
+                          <span className="text-xs font-medium px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">
                             {rule.ruleType.replace(/([A-Z])/g, ' $1').trim()}
                           </span>
                         )}
@@ -961,7 +947,7 @@ export default function EscalationsPage() {
                       <input type="checkbox" className="sr-only peer" checked={rule.isActive}
                         onChange={(e) => handleToggleRule(rule.id, e.target.checked)} />
                       <div className="w-10 h-5 bg-gray-200 rounded-full peer
-                        peer-checked:bg-indigo-700
+                        peer-checked:bg-emerald-500
                         after:content-[''] after:absolute after:top-[2px] after:left-[2px]
                         after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
                         peer-checked:after:translate-x-5
@@ -989,7 +975,7 @@ export default function EscalationsPage() {
                       <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer hover:text-gray-700 transition-colors">
                         <input type="checkbox" checked={rule.notifyDashboard}
                           onChange={(e) => handleNotificationToggle(rule, 'notifyDashboard', e.target.checked)}
-                          className="rounded border-gray-300 accent-indigo-700" />
+                          className="rounded border-gray-300 accent-emerald-700" />
                         <Bell className="h-3.5 w-3.5" />
                         Dashboard
                       </label>
@@ -1030,7 +1016,7 @@ export default function EscalationsPage() {
         <Card className="border-gray-100 shadow-sm mb-6">
           <CardHeader className="border-b border-gray-100 py-3">
             <CardTitle className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-              <Users className="h-4 w-4 text-indigo-600" />
+              <Users className="h-4 w-4 text-emerald-600" />
               Open Escalations by Agent
             </CardTitle>
           </CardHeader>
@@ -1045,7 +1031,7 @@ export default function EscalationsPage() {
                     <div key={name} className="flex items-center gap-3">
                       <div className="w-24 text-xs font-medium text-gray-700 truncate flex-shrink-0">{name}</div>
                       <div className="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
-                        <div className="h-2 rounded-full bg-gradient-to-r from-amber-400 to-red-500 transition-all duration-500"
+                        <div className="h-2 rounded-full bg-amber-500 transition-all duration-500"
                           style={{ width: `${pct}%` }} />
                       </div>
                       <span className={`text-xs font-bold w-6 text-right ${
@@ -1063,7 +1049,7 @@ export default function EscalationsPage() {
       <Card className="border-gray-100 shadow-sm mb-6">
         <CardHeader className="border-b border-gray-100 py-4">
           <CardTitle className="text-base font-semibold text-gray-800 flex items-center gap-2">
-            <Users className="h-5 w-5 text-indigo-600" />
+            <Users className="h-5 w-5 text-emerald-600" />
             Team Escalation Chains
           </CardTitle>
           <p className="text-xs text-gray-400 mt-1">
@@ -1081,73 +1067,72 @@ export default function EscalationsPage() {
             <div className="p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {teamPolicies.map((item: any) => {
                 const steps = [
-                  { label: 'AI',      color: 'bg-purple-100 text-purple-700 border-purple-200', field: null,                    timeout: null },
-                  { label: 'CRR',     color: 'bg-blue-100 text-blue-700 border-blue-200',       field: 'crrTimeoutMinutes',     timeout: item.policy.crrTimeoutMinutes },
-                  { label: 'Manager', color: 'bg-amber-100 text-amber-700 border-amber-200',    field: 'managerTimeoutMinutes', timeout: item.policy.managerTimeoutMinutes },
-                  { label: 'HOD',     color: 'bg-red-100 text-red-700 border-red-200',          field: 'hodTimeoutMinutes',     timeout: item.policy.hodTimeoutMinutes },
+                  { label: 'AI',      ring: 'border-purple-400', fill: 'bg-purple-500', text: 'text-purple-700', field: null as string | null },
+                  { label: 'CRR',     ring: 'border-blue-400',   fill: 'bg-blue-500',   text: 'text-blue-700',   field: 'crrTimeoutMinutes'     },
+                  { label: 'Manager', ring: 'border-amber-400',  fill: 'bg-amber-500',  text: 'text-amber-700',  field: 'managerTimeoutMinutes' },
+                  { label: 'HOD',     ring: 'border-rose-400',   fill: 'bg-rose-500',   text: 'text-rose-700',   field: 'hodTimeoutMinutes'     },
                 ];
                 return (
                   <div key={item.teamId}
-                    className={`rounded-2xl border p-4 transition-all ${item.policy.isActive ? 'border-gray-200 bg-white shadow-sm' : 'border-gray-100 bg-gray-50/50 opacity-70'}`}>
+                    className={`group rounded-3xl border p-6 transition-all duration-300 ${item.policy.isActive ? 'border-gray-200 bg-white shadow-md hover:shadow-xl hover:-translate-y-1' : 'border-gray-100 bg-gray-50/60 opacity-70'}`}>
 
-                    {/* Header: team name + active toggle */}
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-2">
-                        <div className="h-7 w-7 rounded-lg bg-indigo-50 flex items-center justify-center">
-                          <Users className="h-3.5 w-3.5 text-indigo-600" />
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="h-11 w-11 rounded-2xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                          <Users className="h-5 w-5 text-emerald-600" />
                         </div>
-                        <span className="text-sm font-semibold text-gray-900">{item.teamName}</span>
+                        <div className="min-w-0">
+                          <p className="text-base font-bold text-gray-900 truncate">{item.teamName}</p>
+                          <p className="text-xs text-gray-400">{item.policy.isActive ? 'Escalation chain active' : 'Chain paused'}</p>
+                        </div>
                       </div>
                       <button
                         onClick={() => setTeamPolicies(prev => prev.map(t =>
                           t.teamId === item.teamId ? { ...t, policy: { ...t.policy, isActive: !t.policy.isActive } } : t
                         ))}
-                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${item.policy.isActive ? 'bg-green-500' : 'bg-gray-300'}`}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${item.policy.isActive ? 'bg-green-500' : 'bg-gray-300'}`}
                       >
-                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${item.policy.isActive ? 'translate-x-4' : 'translate-x-1'}`} />
+                        <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${item.policy.isActive ? 'translate-x-5' : 'translate-x-0.5'}`} />
                       </button>
                     </div>
 
-                    {/* Timeout inputs — vertical stack */}
-                    <div className="space-y-2 mb-4">
-                      {steps.filter(s => s.field !== null).map(step => (
-                        <div key={step.label} className="flex items-center gap-2">
-                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border w-16 text-center flex-shrink-0 ${step.color}`}>
-                            {step.label}
-                          </span>
-                          <span className="text-[10px] text-gray-400 flex-shrink-0">timeout</span>
-                          <input
-                            type="number" min={1}
-                            value={item.policy[step.field!]}
-                            onChange={e => setTeamPolicies(prev => prev.map(t =>
-                              t.teamId === item.teamId ? { ...t, policy: { ...t.policy, [step.field!]: e.target.value } } : t
-                            ))}
-                            className="w-16 text-center text-xs border border-gray-200 rounded-lg px-1 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-gray-50"
-                          />
-                          <span className="text-[10px] text-gray-400">min</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Chain summary */}
-                    <div className="flex items-center gap-1 mb-4 flex-wrap">
-                      {steps.map((step, i) => (
-                        <div key={step.label} className="flex items-center gap-1">
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${step.color}`}>{step.label}</span>
-                          {i < steps.length - 1 && (
-                            <span className="text-[9px] text-gray-300">
-                              {step.timeout ? `──${step.timeout}m──▶` : '──▶'}
-                            </span>
-                          )}
-                        </div>
-                      ))}
+                    {/* Escalation timeline — dots + connecting line, inline editable timeouts */}
+                    <div className="relative mb-6">
+                      {/* connecting line behind the dots (inset to first/last dot centres) */}
+                      <div className="absolute top-[18px] left-[12.5%] right-[12.5%] h-1 rounded-full bg-gray-200" />
+                      <div className="relative flex justify-between">
+                        {steps.map(step => (
+                          <div key={step.label} className="flex flex-col items-center gap-2 flex-1 min-w-0 px-0.5">
+                            <div className={`relative z-10 h-10 w-10 rounded-full bg-white border-[3px] ${step.ring} flex items-center justify-center shadow-sm`}>
+                              <span className={`h-4 w-4 rounded-full ${step.fill}`} />
+                            </div>
+                            <span className={`text-xs font-bold ${step.text}`}>{step.label}</span>
+                            {step.field ? (
+                              <div className="flex items-center gap-0.5 max-w-full bg-gray-50 border border-gray-200 rounded-lg px-1.5 py-1 focus-within:ring-2 focus-within:ring-emerald-300 focus-within:border-emerald-300 transition">
+                                <input
+                                  type="number" min={1}
+                                  value={item.policy[step.field]}
+                                  onChange={e => setTeamPolicies(prev => prev.map(t =>
+                                    t.teamId === item.teamId ? { ...t, policy: { ...t.policy, [step.field!]: e.target.value } } : t
+                                  ))}
+                                  className="w-8 text-center text-xs sm:text-sm font-bold bg-transparent focus:outline-none text-gray-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                />
+                                <span className="text-[9px] text-gray-400 font-medium">min</span>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-gray-400 font-medium mt-1.5">immediate</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
                     {/* Save button */}
                     <button
                       onClick={() => handleSaveTeamPolicy(item.teamId, item)}
                       disabled={savingTeamId === item.teamId}
-                      className="w-full py-2 text-xs font-semibold bg-indigo-700 text-white rounded-xl hover:bg-indigo-800 disabled:opacity-50 transition-colors"
+                      className="w-full py-2.5 text-sm font-semibold bg-emerald-100 text-emerald-700 rounded-xl hover:bg-emerald-200 active:scale-[0.98] disabled:opacity-50 transition-all shadow-sm"
                     >
                       {savingTeamId === item.teamId ? 'Saving…' : 'Save Changes'}
                     </button>
@@ -1183,19 +1168,19 @@ export default function EscalationsPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
               <input value={searchEsc} onChange={e => setSearchEsc(e.target.value)}
                 placeholder="Search by customer, agent, or reason…"
-                className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white" />
+                className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-white" />
             </div>
             {/* Filters + Bulk */}
             <div className="flex items-center gap-2 flex-wrap">
               <select value={filter} onChange={e => setFilter(e.target.value as typeof filter)}
-                className="px-3 py-1.5 text-sm font-medium border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300 cursor-pointer">
+                className="px-3 py-1.5 text-sm font-medium border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-300 cursor-pointer">
                 <option value="all">All ({escalations.length})</option>
                 <option value="pending">Pending ({escalations.filter(e => e.status === 'Pending').length})</option>
                 <option value="inprogress">In Progress ({escalations.filter(e => e.status === 'InProgress').length})</option>
                 <option value="resolved">Resolved ({escalations.filter(e => e.status === 'Resolved').length})</option>
               </select>
               <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value as any)}
-                className="px-3 py-1.5 text-sm font-medium border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300 cursor-pointer">
+                className="px-3 py-1.5 text-sm font-medium border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-300 cursor-pointer">
                 <option value="all">All Priorities</option>
                 <option value="High">🔴 High</option>
                 <option value="Normal">🟡 Normal</option>
@@ -1206,7 +1191,7 @@ export default function EscalationsPage() {
                 <div className="flex items-center gap-2 ml-auto">
                   <span className="text-xs text-gray-500">{selectedEscIds.size} selected</span>
                   <button onClick={handleBulkResolve} disabled={bulkResolving}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50">
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-green-100 text-green-700 rounded-lg hover:bg-green-200 disabled:opacity-50">
                     <CheckCircle className="h-3.5 w-3.5" />
                     {bulkResolving ? 'Resolving…' : `Resolve All (${selectedEscIds.size})`}
                   </button>
@@ -1248,7 +1233,7 @@ export default function EscalationsPage() {
                 return (
                 <div key={esc.id} className={`group border rounded-xl p-4 bg-white
                   hover:shadow-lg hover:-translate-y-px transition-all duration-300 animate-fade-up ${delays[idx % 4]}
-                  ${selectedEscIds.has(esc.id) ? 'border-indigo-300 bg-indigo-50/30' : 'border-gray-100'}`}>
+                  ${selectedEscIds.has(esc.id) ? 'border-emerald-300 bg-emerald-50/30' : 'border-gray-100'}`}>
                   {/* Select checkbox */}
                   {esc.status !== 'Resolved' && (
                     <div className="flex items-center gap-2 mb-2">
@@ -1259,7 +1244,7 @@ export default function EscalationsPage() {
                           e.target.checked ? next.add(esc.id) : next.delete(esc.id);
                           return next;
                         })}
-                        className="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                       />
                       <span className="text-[10px] text-gray-400">Select for bulk action</span>
                     </div>
@@ -1277,7 +1262,7 @@ export default function EscalationsPage() {
                         </h4>
                         <div className="flex items-center gap-2 mt-0.5">
                           <button onClick={() => router.push(`/dashboard/conversations?id=${esc.conversationId}`)}
-                            className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5">
+                            className="text-xs text-emerald-600 hover:text-emerald-800 flex items-center gap-0.5">
                             Conv #{esc.conversationId} <ExternalLink className="h-3 w-3" />
                           </button>
                           {/* Escalation Level badge */}
@@ -1348,16 +1333,9 @@ export default function EscalationsPage() {
                         {/* Mark In Progress */}
                         {esc.status === 'Pending' && (
                           <button
-                            onClick={() => {
-                              escalationsApi.create({
-                                conversationId: esc.conversationId,
-                                escalatedToUserId: esc.escalatedToUserId,
-                                reason: esc.reason,
-                                priority: esc.priority
-                              }).then(() => loadEscalations()).catch(() => {});
-                              showToast('Marked as In Progress', 'success');
-                            }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 active:scale-95 transition-all">
+                            disabled={markingInProgress === esc.id}
+                            onClick={() => handleMarkInProgress(esc)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 active:scale-95 transition-all disabled:opacity-50">
                             <UserCheck className="h-3.5 w-3.5" />
                             In Progress
                           </button>
@@ -1376,8 +1354,8 @@ export default function EscalationsPage() {
                               {users.filter(u => u.id !== esc.escalatedToUserId).map((u: any) => (
                                 <button key={u.id}
                                   onClick={() => handleReassign(esc.id, u.id, u.fullName)}
-                                  className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 flex items-center gap-2">
-                                  <span className="h-5 w-5 rounded-full bg-slate-700 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">
+                                  className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-50 flex items-center gap-2">
+                                  <span className="h-5 w-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] font-bold flex-shrink-0">
                                     {u.fullName?.[0] ?? '?'}
                                   </span>
                                   <span className="truncate">{u.fullName}</span>
@@ -1389,7 +1367,7 @@ export default function EscalationsPage() {
                         </div>
                         {/* Resolve */}
                         <button onClick={() => handleResolveClick(esc)}
-                          className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 active:scale-95 transition-all shadow-sm">
+                          className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 active:scale-95 transition-all shadow-sm">
                           <CheckCircle className="h-3.5 w-3.5" />
                           Resolve
                         </button>
@@ -1407,11 +1385,11 @@ export default function EscalationsPage() {
                           onChange={e => setQuickNotes(prev => ({ ...prev, [esc.id]: e.target.value }))}
                           onKeyDown={e => e.key === 'Enter' && handleSaveNote(esc.id)}
                           placeholder="Add resolution note and resolve… (Enter)"
-                          className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-300 bg-gray-50"
+                          className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-emerald-300 bg-gray-50"
                         />
                         {quickNotes[esc.id]?.trim() && (
                           <button onClick={() => handleSaveNote(esc.id)} disabled={savingNote === esc.id}
-                            className="px-3 py-1.5 text-xs font-semibold bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 whitespace-nowrap flex-shrink-0">
+                            className="px-3 py-1.5 text-xs font-semibold bg-green-100 text-green-700 rounded-lg hover:bg-green-200 disabled:opacity-50 whitespace-nowrap flex-shrink-0">
                             {savingNote === esc.id ? '…' : '✓ Resolve'}
                           </button>
                         )}
@@ -1467,7 +1445,7 @@ export default function EscalationsPage() {
                   onChange={(e) => setResolutionNotes(e.target.value)}
                   placeholder="Describe how the issue was resolved..."
                   rows={4}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   disabled={submitting}
                   required
                 />

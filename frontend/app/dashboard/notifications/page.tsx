@@ -94,7 +94,7 @@ export default function NotificationsPage() {
 
   const getIcon = (type: string) => {
     switch (type) {
-      case 'new_message': return <MessageSquare className="h-5 w-5 text-indigo-500" />;
+      case 'new_message': return <MessageSquare className="h-5 w-5 text-emerald-500" />;
       case 'escalation': return <AlertTriangle className="h-5 w-5 text-orange-500" />;
       case 'assignment': return <UserPlus className="h-5 w-5 text-green-500" />;
       default: return <Settings className="h-5 w-5 text-gray-400" />;
@@ -118,7 +118,7 @@ export default function NotificationsPage() {
   ];
 
   return (
-    <div className="bg-white min-h-screen flex flex-col">
+    <div className="bg-beige min-h-screen flex flex-col">
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         {/* Actions bar */}
@@ -132,7 +132,7 @@ export default function NotificationsPage() {
               size="sm"
               onClick={handleMarkAllRead}
               disabled={markingAll}
-              className="text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+              className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
             >
               <CheckCheck className="h-4 w-4 mr-2" />
               Mark all as read
@@ -147,7 +147,7 @@ export default function NotificationsPage() {
               onClick={() => setFilter(tab.key)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                 filter === tab.key
-                  ? 'bg-indigo-700 text-white'
+                  ? 'bg-emerald-100 text-emerald-700'
                   : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
               }`}
             >
@@ -168,7 +168,7 @@ export default function NotificationsPage() {
         <div className="bg-white rounded-xl border border-gray-100 overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
           {loading ? (
             <div className="flex items-center justify-center py-16">
-              <div className="h-7 w-7 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+              <div className="h-7 w-7 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-gray-400">
@@ -182,10 +182,10 @@ export default function NotificationsPage() {
                 <div
                   key={n.id}
                   onClick={() => handleMarkAsRead(n)}
-                  className={`flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors border-l-4 ${getPriorityStyle(n.priority)} ${!n.isRead ? 'bg-indigo-50/40' : ''}`}
+                  className={`flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors border-l-4 ${getPriorityStyle(n.priority)} ${!n.isRead ? 'bg-emerald-50/40' : ''}`}
                 >
                   <div className={`mt-0.5 flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
-                    n.type === 'new_message' ? 'bg-indigo-100' :
+                    n.type === 'new_message' ? 'bg-emerald-100' :
                     n.type === 'escalation' ? 'bg-orange-100' :
                     n.type === 'assignment' ? 'bg-green-100' : 'bg-gray-100'
                   }`}>
@@ -200,13 +200,13 @@ export default function NotificationsPage() {
                         {n.priority === 'High' && (
                           <Badge className="text-xs bg-red-100 text-red-700 border-red-200">High</Badge>
                         )}
-                        {!n.isRead && <span className="h-2 w-2 rounded-full bg-indigo-500 flex-shrink-0" />}
+                        {!n.isRead && <span className="h-2 w-2 rounded-full bg-emerald-500 flex-shrink-0" />}
                       </div>
                     </div>
                     <p className="text-sm text-gray-500 mt-0.5 line-clamp-2">{n.message}</p>
                     <div className="flex items-center gap-3 mt-1.5">
                       <span className="text-xs text-gray-400">{getRelativeTime(n.createdAt)}</span>
-                      {n.conversationId && <span className="text-xs text-indigo-500">→ View conversation</span>}
+                      {n.conversationId && <span className="text-xs text-emerald-500">→ View conversation</span>}
                       {n.escalationId && <span className="text-xs text-orange-500">→ View escalation</span>}
                     </div>
                   </div>

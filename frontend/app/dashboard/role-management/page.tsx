@@ -7,13 +7,15 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { ShieldCheck } from 'lucide-react';
 
-const ROLES = ['Admin', 'HOD', 'Manager', 'CRR', 'Agent'];
+const ROLES = ['Admin', 'HOD', 'Manager', 'CRR'];
 
 const PAGES: { key: string; label: string }[] = [
   { key: 'overview',        label: 'Overview' },
   { key: 'sessions',        label: 'Sessions' },
   { key: 'conversations',   label: 'Conversations' },
   { key: 'customers',       label: 'Customers' },
+  { key: 'gallery',         label: 'Gallery' },
+  { key: 'catalogs',        label: 'Catalogs (manage)' },
   { key: 'escalations',     label: 'Escalations' },
   { key: 'reports',         label: 'Reports & Analytics' },
   { key: 'performance',     label: 'Performance' },
@@ -22,6 +24,7 @@ const PAGES: { key: string; label: string }[] = [
   { key: 'role-management', label: 'Role Management' },
   { key: 'audit-logs',      label: 'Audit Logs' },
   { key: 'webhook-logs',    label: 'Webhook Logs' },
+  { key: 'system-health',   label: 'System Health' },
   { key: 'quick-replies',   label: 'Quick Replies' },
   { key: 'notifications',   label: 'Notifications' },
   { key: 'ai-prompts',      label: 'AI Prompts' },
@@ -98,13 +101,13 @@ export default function RoleManagementPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="h-7 w-7 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+        <div className="h-7 w-7 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="bg-white min-h-screen p-4 sm:p-6 lg:p-8">
+    <div className="bg-beige min-h-screen p-4 sm:p-6 lg:p-8">
       <div>
 
         {/* Info banner */}
@@ -142,8 +145,10 @@ export default function RoleManagementPage() {
                   <tr key={key} className="hover:bg-gray-50/50 transition-colors">
                     <td className="px-5 py-3.5 font-medium text-gray-700">{label}</td>
                     {ROLES.map(role => {
-                      const checked = matrix[role]?.[key] ?? false;
                       const isAdmin = role === 'Admin';
+                      // Admin has implicit full access (never stored in RolePermissions), so its
+                      // toggles must always render ON — otherwise the column looks fully revoked.
+                      const checked = isAdmin ? true : (matrix[role]?.[key] ?? false);
                       return (
                         <td key={role} className="px-4 py-3.5 text-center">
                           <button
@@ -151,7 +156,7 @@ export default function RoleManagementPage() {
                             disabled={isAdmin}
                             className={`
                               w-10 h-6 rounded-full transition-colors duration-200 relative
-                              ${checked ? 'bg-indigo-600' : 'bg-gray-200'}
+                              ${checked ? 'bg-emerald-600' : 'bg-gray-200'}
                               ${isAdmin ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:opacity-80'}
                             `}
                             title={isAdmin ? 'Admin always has full access' : checked ? 'Click to revoke' : 'Click to grant'}
@@ -185,7 +190,7 @@ export default function RoleManagementPage() {
             disabled={saving || !dirty}
             className={`px-6 transition-all duration-200 ${
               dirty
-                ? 'bg-indigo-700 hover:bg-indigo-800 text-white shadow-sm'
+                ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-700 shadow-sm'
                 : 'bg-gray-100 text-gray-400 cursor-not-allowed'
             }`}
           >

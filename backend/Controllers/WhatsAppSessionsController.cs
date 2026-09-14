@@ -18,6 +18,7 @@ public class WhatsAppSessionsController : ControllerBase
     private readonly ILogger<WhatsAppSessionsController> _logger;
     private readonly WhatsAppOrchestrator _orchestrator;
     private readonly ConversationService _conversationService;
+    private readonly ITeamMemberRepository _teamMembers;
     private readonly string _interaktBaseUrl;
     private readonly string _metaGraphBaseUrl;
 
@@ -29,7 +30,8 @@ public class WhatsAppSessionsController : ControllerBase
         ILogger<WhatsAppSessionsController> logger,
         IConfiguration configuration,
         WhatsAppOrchestrator orchestrator,
-        ConversationService conversationService)
+        ConversationService conversationService,
+        ITeamMemberRepository teamMembers)
     {
         _sessionRepo = sessionRepo;
         _userRepo = userRepo;
@@ -38,8 +40,38 @@ public class WhatsAppSessionsController : ControllerBase
         _logger = logger;
         _orchestrator = orchestrator;
         _conversationService = conversationService;
+        _teamMembers = teamMembers;
         _interaktBaseUrl = configuration["ExternalApis:InteraktBaseUrl"] ?? "https://api.interakt.ai";
         _metaGraphBaseUrl = configuration["ExternalApis:MetaGraphBaseUrl"] ?? "https://graph.facebook.com";
+    }
+
+    /// <summary>Assigned-user ids the caller may see (null = all, Admin only): CRR/Agent → own,
+    /// Manager/HOD → own team(s), Admin → all. Mirrors the conversation visibility rule. </summary>
+    private async Task<List<int>?> ResolveVisibleAsync(int? requested)
+    {
+        var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value ?? "";
+        var uid = GetCaller().Id;
+
+        List<int>? visible;
+        if (role.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+            visible = null;
+        else if (role.Equals("CRR", StringComparison.OrdinalIgnoreCase) || role.Equals("Agent", StringComparison.OrdinalIgnoreCase))
+            visible = new List<int> { uid };
+        else
+        {
+            var ids = new HashSet<int> { uid };
+            foreach (var membership in await _teamMembers.GetMembershipsByUserAsync(uid))
+                foreach (var member in await _teamMembers.GetMembersByTeamAsync(membership.TeamId))
+                    ids.Add(member.UserId);
+            visible = ids.ToList();
+        }
+
+        if (requested.HasValue)
+        {
+            if (visible == null) return new List<int> { requested.Value };
+            return visible.Contains(requested.Value) ? new List<int> { requested.Value } : visible;
+        }
+        return visible;
     }
 
     private (int Id, string Name) GetCaller()
@@ -181,7 +213,7 @@ public class WhatsAppSessionsController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] bool? isActive = null, [FromQuery] int? assignedUserId = null)
     {
-        var sessions = await _sessionRepo.GetAllWithUserAsync(isActive, assignedUserId);
+        var sessions = await _sessionRepo.GetAllWithUserAsync(isActive, await ResolveVisibleAsync(assignedUserId));
         var dtos = sessions.Select(session => new WhatsAppSessionDTO
         {
             Id = session.Id,
@@ -193,7 +225,10 @@ public class WhatsAppSessionsController : ControllerBase
             IsConnected = session.IsConnected,
             IsActive = session.IsActive,
             AutoReplyEnabled = session.AutoReplyEnabled,
+            AiMode = session.AiMode,
+            SlaMinutes = session.SlaMinutes,
             MessagesToday = session.MessagesToday,
+            OutboundToday = session.OutboundToday,
             LastActiveAt = session.LastActiveAt,
             LastInboundAt = session.LastInboundAt,
             CreatedAt = session.CreatedAt,
@@ -225,6 +260,8 @@ public class WhatsAppSessionsController : ControllerBase
             IsConnected = session.IsConnected,
             IsActive = session.IsActive,
             AutoReplyEnabled = session.AutoReplyEnabled,
+            AiMode = session.AiMode,
+            SlaMinutes = session.SlaMinutes,
             MessagesToday = session.MessagesToday,
             LastActiveAt = session.LastActiveAt,
             CreatedAt = session.CreatedAt,
@@ -326,6 +363,12 @@ public class WhatsAppSessionsController : ControllerBase
         if (request.IsActive.HasValue) session.IsActive = request.IsActive.Value;
         if (request.IsConnected.HasValue) session.IsConnected = request.IsConnected.Value;
         if (request.AutoReplyEnabled.HasValue) session.AutoReplyEnabled = request.AutoReplyEnabled.Value;
+        if (!string.IsNullOrWhiteSpace(request.AiMode))
+        {
+            var m = request.AiMode.Trim().ToLowerInvariant();
+            if (m is "off" or "suggest" or "auto") session.AiMode = m;
+        }
+        if (request.SlaMinutes.HasValue) session.SlaMinutes = Math.Clamp(request.SlaMinutes.Value, 1, 1440);
         if (request.InteraktApiKey != null) session.InteraktApiKey = request.InteraktApiKey;
         if (request.MetaPhoneNumberId != null) session.MetaPhoneNumberId = request.MetaPhoneNumberId;
         if (request.MetaAccessToken != null) session.MetaAccessToken = request.MetaAccessToken;

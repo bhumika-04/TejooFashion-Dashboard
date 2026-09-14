@@ -15,9 +15,7 @@ export function middleware(request: NextRequest) {
     const token = request.cookies.get('authToken')?.value;
 
     if (!token) {
-      const loginUrl = new URL('/login', request.url);
-      loginUrl.searchParams.set('redirect', pathname);
-      return NextResponse.redirect(loginUrl);
+      return NextResponse.redirect(new URL('/login', request.url));
     }
 
     // Basic JWT structure check (3 base64 segments separated by dots)

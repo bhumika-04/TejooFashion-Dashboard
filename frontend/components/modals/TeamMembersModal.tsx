@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { UserPlus, Trash2, Users, Shield, Network } from 'lucide-react';
+import { UserPlus, Trash2, Users, Shield, Network, ChevronDown } from 'lucide-react';
 import { teamsApi } from '@/services/api';
 import { formatDateOnly } from '@/lib/utils';
 import { useToast } from '@/components/ui/toast';
@@ -47,6 +47,9 @@ export function TeamMembersModal({ open, onOpenChange, teamId, teamName, onMembe
   const [selectedRoleInTeam, setSelectedRoleInTeam] = useState<string>('CRR');
   const [selectedManagerId, setSelectedManagerId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'list' | 'tree'>('list');
+  const [userDropOpen, setUserDropOpen] = useState(false);
+  const [userQuery, setUserQuery] = useState('');
+  const userDropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -54,6 +57,21 @@ export function TeamMembersModal({ open, onOpenChange, teamId, teamName, onMembe
       fetchAvailableUsers();
     }
   }, [open, teamId]);
+
+  // Close the user picker on outside click
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (userDropRef.current && !userDropRef.current.contains(e.target as Node)) setUserDropOpen(false);
+    };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
+  const selectedUser = availableUsers.find(u => u.id === selectedUserId) || null;
+  const filteredUsers = availableUsers.filter(u => {
+    const q = userQuery.trim().toLowerCase();
+    return !q || u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.role.toLowerCase().includes(q);
+  });
 
   const fetchMembers = async () => {
     try {
@@ -217,19 +235,49 @@ export function TeamMembersModal({ open, onOpenChange, teamId, teamName, onMembe
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Select User <span className="text-red-500">*</span>
                     </label>
-                    <select
-                      value={selectedUserId || ''}
-                      onChange={(e) => setSelectedUserId(e.target.value ? Number(e.target.value) : null)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      disabled={loading}
-                    >
-                      <option value="">-- Select User --</option>
-                      {availableUsers.map((user) => (
-                        <option key={user.id} value={user.id}>
-                          {user.email} — {user.fullName} ({user.role})
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative" ref={userDropRef}>
+                      <button
+                        type="button"
+                        onClick={() => setUserDropOpen(o => !o)}
+                        disabled={loading}
+                        className="w-full flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md bg-white text-left text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                      >
+                        <span className={`truncate ${selectedUser ? 'text-gray-900' : 'text-gray-400'}`}>
+                          {selectedUser ? `${selectedUser.fullName} · ${selectedUser.role}` : '-- Select User --'}
+                        </span>
+                        <ChevronDown className={`h-4 w-4 text-gray-400 flex-shrink-0 transition-transform ${userDropOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                      {userDropOpen && (
+                        <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                          <div className="p-2 border-b border-gray-100">
+                            <input
+                              autoFocus
+                              value={userQuery}
+                              onChange={e => setUserQuery(e.target.value)}
+                              placeholder="Search name, email or role…"
+                              className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                            />
+                          </div>
+                          <div className="max-h-56 overflow-y-auto py-1">
+                            {filteredUsers.length === 0 ? (
+                              <p className="px-3 py-2 text-sm text-gray-400">No matching users</p>
+                            ) : filteredUsers.map(user => (
+                              <button
+                                key={user.id}
+                                type="button"
+                                onClick={() => { setSelectedUserId(user.id); setUserDropOpen(false); setUserQuery(''); }}
+                                className={`w-full text-left px-3 py-2 transition-colors hover:bg-emerald-50 ${selectedUserId === user.id ? 'bg-emerald-50' : ''}`}
+                              >
+                                <p className="text-sm font-medium text-gray-800 truncate">
+                                  {user.fullName} <span className="text-xs font-normal text-gray-400">({user.role})</span>
+                                </p>
+                                <p className="text-xs text-gray-400 truncate">{user.email}</p>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div>
@@ -239,7 +287,7 @@ export function TeamMembersModal({ open, onOpenChange, teamId, teamName, onMembe
                     <select
                       value={selectedRoleInTeam}
                       onChange={(e) => setSelectedRoleInTeam(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
                       disabled={loading}
                     >
                       <option value="CRR">CRR (Customer Relationship Representative)</option>
@@ -259,7 +307,7 @@ export function TeamMembersModal({ open, onOpenChange, teamId, teamName, onMembe
                     <select
                       value={selectedManagerId || ''}
                       onChange={(e) => setSelectedManagerId(e.target.value ? Number(e.target.value) : null)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
                       disabled={loading}
                     >
                       <option value="">-- No Manager (Top Level) --</option>
@@ -360,15 +408,16 @@ export function TeamMembersModal({ open, onOpenChange, teamId, teamName, onMembe
                             member.id,
                             e.target.value ? Number(e.target.value) : null
                           )}
-                          className="w-40 px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-44 pl-2.5 pr-8 py-1.5 text-sm border border-gray-300 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                           disabled={loading}
+                          title="Reporting manager"
                         >
-                          <option value="">No Manager</option>
+                          <option value="">No manager</option>
                           {members
                             .filter((m) => m.userId !== member.userId && ['Admin', 'HOD', 'Manager'].includes(m.roleInTeam))
                             .map((manager) => (
                               <option key={manager.userId} value={manager.userId}>
-                                Reports to: {manager.fullName}
+                                {manager.fullName}
                               </option>
                             ))}
                         </select>

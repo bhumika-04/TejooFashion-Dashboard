@@ -6,7 +6,9 @@ process.env.NEXT_TELEMETRY_DISABLED = '1';
 
 const nextConfig = {
   images: {
-    domains: ['localhost'],
+    remotePatterns: [
+      { protocol: 'http', hostname: 'localhost' },
+    ],
   },
   async rewrites() {
     return [

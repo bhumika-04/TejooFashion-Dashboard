@@ -73,7 +73,7 @@ interface DialogHeaderProps {
 
 export function DialogHeader({ children, onClose }: DialogHeaderProps) {
   return (
-    <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50">
+    <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-emerald-50">
       {children}
       {onClose && (
         <button
@@ -93,7 +93,7 @@ interface DialogTitleProps {
 }
 
 export function DialogTitle({ children, className }: DialogTitleProps) {
-  return <h2 className={className ?? "text-xl font-bold bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 bg-clip-text text-transparent"}>{children}</h2>;
+  return <h2 className={className ?? "text-xl font-bold text-emerald-700"}>{children}</h2>;
 }
 
 interface DialogBodyProps {
@@ -112,7 +112,7 @@ interface DialogFooterProps {
 
 export function DialogFooter({ children, className }: DialogFooterProps) {
   return (
-    <div className={cn('flex justify-end gap-3 p-6 border-t border-gray-100 bg-gradient-to-r from-gray-50 to-slate-50', className)}>
+    <div className={cn('flex justify-end gap-3 p-6 border-t border-gray-100 bg-gray-50', className)}>
       {children}
     </div>
   );

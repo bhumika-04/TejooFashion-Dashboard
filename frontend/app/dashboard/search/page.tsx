@@ -27,14 +27,14 @@ interface SearchResults {
 }
 
 const typeIcon: Record<ResultType, React.ReactNode> = {
-  conversation: <MessageSquare className="h-4 w-4 text-indigo-500" />,
+  conversation: <MessageSquare className="h-4 w-4 text-emerald-500" />,
   message: <Inbox className="h-4 w-4 text-green-500" />,
   customer: <UserRound className="h-4 w-4 text-orange-500" />,
   user: <Users className="h-4 w-4 text-blue-500" />,
 };
 
 const typeBg: Record<ResultType, string> = {
-  conversation: 'bg-indigo-50',
+  conversation: 'bg-emerald-50',
   message: 'bg-green-50',
   customer: 'bg-orange-50',
   user: 'bg-blue-50',
@@ -113,7 +113,7 @@ export default function SearchPage() {
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-gray-50">
+    <div className="flex flex-col h-full min-h-0 bg-beige">
       {/* Header */}
       <div className="bg-white border-b border-gray-100 px-6 py-4">
         <h1 className="text-xl font-bold text-gray-900 mb-3">Global Search</h1>
@@ -124,7 +124,7 @@ export default function SearchPage() {
             value={query}
             onChange={e => handleInput(e.target.value)}
             placeholder="Search conversations, messages, customers, users…"
-            className="w-full pl-10 pr-10 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-200"
+            className="w-full pl-10 pr-10 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-200"
           />
           {query && (
             <button onClick={clearSearch} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">

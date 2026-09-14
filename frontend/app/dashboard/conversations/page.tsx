@@ -4,12 +4,12 @@ import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { conversationsApi, messagesApi, sessionsApi, usersApi, quickRepliesApi, tagsApi, customersApi, escalationsApi } from '@/services/api';
+import { conversationsApi, messagesApi, sessionsApi, usersApi, quickRepliesApi, tagsApi, customersApi, escalationsApi, catalogsApi } from '@/services/api';
 import {
   Clock, CheckCircle2, AlertTriangle, AlertCircle, Phone,
   MessageSquare, Send, Search, X, UserCheck, BrainCircuit, RefreshCw,
   ChevronDown, ChevronLeft, ChevronRight, Smile, Meh, Frown, Zap, Tag, Download, ArrowDown, Wifi, WifiOff,
-  Paperclip, Image, Video, FileText, Music, XCircle, Check, Bookmark, Plus,
+  Paperclip, Image, Video, FileText, Music, XCircle, Check, Bookmark, Plus, Layers, Edit, MoreVertical,
 } from 'lucide-react';
 import { getRelativeTime, formatDate, parseUTCDate, formatDayLabel, formatMessageTime } from '@/lib/utils';
 import { useToast } from '@/components/ui/toast';
@@ -88,6 +88,9 @@ export default function ConversationsPage() {
   const currentUserId: number | undefined = isCRR ? (currentUser.id ?? currentUser.Id) : undefined;
   const PAGE_SIZE = 100;
   const [replyText, setReplyText] = useState('');
+  // AI copilot suggestion for the open chat
+  const [suggestion, setSuggestion] = useState<any | null>(null);
+  const [suggestionBusy, setSuggestionBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -97,6 +100,50 @@ export default function ConversationsPage() {
   const [quickReplies, setQuickReplies] = useState<any[]>([]);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
   const quickReplyRef = useRef<HTMLDivElement>(null);
+
+  // Catalog send
+  const [catalogPickerOpen, setCatalogPickerOpen] = useState(false);
+  const [catalogList, setCatalogList] = useState<any[]>([]);
+  const [catalogView, setCatalogView] = useState<any | null>(null);      // opened catalog detail
+  const [catalogSelUrls, setCatalogSelUrls] = useState<Set<string>>(new Set());
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogSending, setCatalogSending] = useState(false);
+  const catalogResolveUrl = (u?: string | null) => {
+    if (!u) return '';
+    const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
+    return u.startsWith('/') ? `${base}${u}` : u;
+  };
+  const openCatalogPicker = async () => {
+    setCatalogPickerOpen(true); setCatalogView(null); setCatalogSelUrls(new Set());
+    setCatalogLoading(true);
+    try { const r = await catalogsApi.getAll(); setCatalogList(r.data ?? []); }
+    catch { showToast('Failed to load catalogs', 'error'); }
+    finally { setCatalogLoading(false); }
+  };
+  const openCatalogView = async (c: any) => {
+    setCatalogLoading(true); setCatalogSelUrls(new Set());
+    try { const r = await catalogsApi.getById(c.id); setCatalogView(r.data); }
+    catch { showToast('Failed to open catalog', 'error'); }
+    finally { setCatalogLoading(false); }
+  };
+  const toggleCatalogImg = (url: string) => {
+    setCatalogSelUrls(prev => {
+      const next = new Set(prev);
+      if (next.has(url)) { next.delete(url); return next; }
+      if (next.size >= 30) { showToast('You can send up to 30 images at once', 'info'); return prev; }
+      next.add(url); return next;
+    });
+  };
+  const sendCatalog = async () => {
+    if (!catalogView || !selectedConv || catalogSelUrls.size === 0) return;
+    setCatalogSending(true);
+    try {
+      const res = await catalogsApi.send(catalogView.id, selectedConv.id, [...catalogSelUrls]);
+      showToast(`Queued ${res.data.queued} image${res.data.queued === 1 ? '' : 's'} to send`, 'success');
+      setCatalogPickerOpen(false); setCatalogView(null); setCatalogSelUrls(new Set());
+    } catch { showToast('Failed to send catalog', 'error'); }
+    finally { setCatalogSending(false); }
+  };
   const [allConvTags, setAllConvTags] = useState<any[]>([]);    // conversation type tags
   const [allCustomerTags, setAllCustomerTags] = useState<any[]>([]); // customer type tags
   // Bulk multi-select (Admin/HOD/Manager only)
@@ -105,12 +152,12 @@ export default function ConversationsPage() {
   const [bulkMenu, setBulkMenu] = useState<'none' | 'assign' | 'tag'>('none');
   const [bulkBusy, setBulkBusy] = useState(false);
   const bulkMenuRef = useRef<HTMLDivElement>(null);
-  const [allTags, setAllTags] = useState<any[]>([]);  // kept for backward compat
   const [convTags, setConvTags] = useState<any[]>([]);
   const [customerTags, setCustomerTags] = useState<any[]>([]);
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [tagTab, setTagTab] = useState<'conv' | 'customer'>('conv');
   const [showTagMenu, setShowTagMenu] = useState(false);
+  const [showKebab, setShowKebab] = useState(false); // header "more actions" menu (Call · Tags · AI Summary · Export)
   const tagMenuRef = useRef<HTMLDivElement>(null);
 
   // Attachment state — supports multiple files
@@ -131,7 +178,6 @@ export default function ConversationsPage() {
   const swipeStartX = useRef<number | null>(null);
   // Legacy aliases for backward compat with existing JSX
   const attachmentFile = attachmentFiles[0] ?? null;
-  const attachmentPreview = attachmentPreviews[0] ?? null;
   const attachMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -214,6 +260,7 @@ export default function ConversationsPage() {
         shouldScrollRef.current = isAtBottomRef.current;
         if (!isAtBottomRef.current) setHasNewMessage(true);
         loadMessages(notification.conversationId);
+        pollSuggestion(notification.conversationId); // draft is generated a beat after the message arrives
       } else {
         const preview = notification.message?.slice(0, 50);
         showToast(`${notification.customerName ?? notification.customerPhone}: ${preview}`, 'info');
@@ -241,20 +288,22 @@ export default function ConversationsPage() {
     loadSessions();
     loadUsers();
     quickRepliesApi.getAll().then(r => setQuickReplies(r.data ?? [])).catch(() => {});
-    tagsApi.getAll('conversation').then(r => { setAllConvTags(r.data ?? []); setAllTags(r.data ?? []); }).catch(() => {});
+    tagsApi.getAll('conversation').then(r => setAllConvTags(r.data ?? [])).catch(() => {});
     tagsApi.getAll('customer').then(r => setAllCustomerTags(r.data ?? [])).catch(() => {});
     return () => { if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current); };
   }, []);
 
-  // Close tag menu on outside click
+  // Close the header "more actions" menu and tag menu on outside click (both live in the same container)
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node))
+      if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node)) {
         setShowTagMenu(false);
+        setShowKebab(false);
+      }
     };
-    if (showTagMenu) document.addEventListener('mousedown', handler);
+    if (showTagMenu || showKebab) document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [showTagMenu]);
+  }, [showTagMenu, showKebab]);
 
   // Close quick-reply popover on outside click
   useEffect(() => {
@@ -348,6 +397,55 @@ export default function ConversationsPage() {
     } catch {
       showToast('Failed to load messages', 'error');
     }
+    // Refresh the AI copilot draft. If none is stored, generate one on demand so chats that never
+    // received a live draft (older/seeded, or arrived before suggest-mode) still get a suggestion.
+    // The backend returns null without spending tokens when there's nothing to suggest (closed,
+    // we already replied, AI off/bypassed for the number, or media with no readable text).
+    try {
+      const r = await conversationsApi.getSuggestion(convId);
+      if (r.data) { setSuggestion(r.data); return; }
+      setSuggestion(null);
+      const g = await conversationsApi.generateSuggestion(convId);
+      if (selectedConvRef.current?.id === convId && g.data) setSuggestion(g.data);
+    } catch { setSuggestion(null); }
+  };
+
+  // The AI draft is generated a couple of seconds AFTER the inbound-message notification (async in
+  // the background processor), so a single fetch on message-arrival misses it. Re-poll a few times
+  // (only while this conversation stays open) so the suggestion card appears without a manual reopen.
+  const pollSuggestion = (convId: number) => {
+    [1500, 4000, 8000, 13000].forEach(delay => {
+      setTimeout(() => {
+        if (selectedConvRef.current?.id !== convId) return;
+        conversationsApi.getSuggestion(convId)
+          .then(r => { if (selectedConvRef.current?.id === convId && r.data) setSuggestion(r.data); })
+          .catch(() => {});
+      }, delay);
+    });
+  };
+
+  // ── AI copilot actions ──
+  const sendSuggestion = async () => {
+    if (!suggestion || !selectedConv) return;
+    setSuggestionBusy(true);
+    try {
+      await conversationsApi.sendMessage(selectedConv.id, suggestion.suggestedText);
+      await conversationsApi.resolveSuggestion(selectedConv.id, suggestion.id, 'Sent');
+      setSuggestion(null);
+      loadMessages(selectedConv.id);
+    } catch { showToast('Failed to send', 'error'); }
+    finally { setSuggestionBusy(false); }
+  };
+  const editSuggestion = () => {
+    if (!suggestion || !selectedConv) return;
+    setReplyText(suggestion.suggestedText);
+    conversationsApi.resolveSuggestion(selectedConv.id, suggestion.id, 'Edited').catch(() => {});
+    setSuggestion(null);
+  };
+  const dismissSuggestion = () => {
+    if (!suggestion || !selectedConv) return;
+    conversationsApi.resolveSuggestion(selectedConv.id, suggestion.id, 'Dismissed').catch(() => {});
+    setSuggestion(null);
   };
 
   const handleSelectConversation = (conv: any) => {
@@ -623,6 +721,18 @@ export default function ConversationsPage() {
     }
   };
 
+  const handleReopen = async () => {
+    if (!selectedConv) return;
+    try {
+      await conversationsApi.updateStatus(selectedConv.id, 'Open');
+      showToast('Conversation reopened', 'success');
+      setSelectedConv({ ...selectedConv, status: 'Open' });
+      loadConversations();
+    } catch {
+      showToast('Failed to reopen conversation', 'error');
+    }
+  };
+
   const handleAssign = async (userId: number, userName: string) => {
     if (!selectedConv) return;
     try {
@@ -696,7 +806,7 @@ export default function ConversationsPage() {
   };
 
   const getAvatarColor = (id: number) => {
-    const colors = ['bg-blue-100 text-blue-700', 'bg-green-100 text-green-700', 'bg-orange-100 text-orange-700', 'bg-purple-100 text-purple-700', 'bg-pink-100 text-pink-700', 'bg-indigo-100 text-indigo-700'];
+    const colors = ['bg-blue-100 text-blue-700', 'bg-green-100 text-green-700', 'bg-orange-100 text-orange-700', 'bg-purple-100 text-purple-700', 'bg-pink-100 text-pink-700', 'bg-emerald-100 text-emerald-700'];
     return colors[id % colors.length];
   };
 
@@ -722,6 +832,26 @@ export default function ConversationsPage() {
   const activeConvs = searchResults ? filteredConversations : filteredConversations.filter(c => c.status === 'Open' && c.status !== 'Escalated');
   const closedConvs = searchResults ? [] : filteredConversations.filter(c => c.status === 'Closed');
   const isClosed = selectedConv?.status === 'Closed';
+
+  // Collapse messages older than 30 days into the conversation summary (display-only — the messages
+  // stay in the DB; the retention job is what actually deletes them). Shows the summary banner + only
+  // the last 30 days of messages, which is what "messages before 30 days are summarised" looks like.
+  const RETENTION_DAYS = 30;
+  const olderCutoffTs = Date.now() - RETENTION_DAYS * 86_400_000;
+  const recentMessages = messages.filter((m: any) => {
+    const t = parseUTCDate(m.createdAt)?.getTime();
+    return t == null || t >= olderCutoffTs;
+  });
+  // Collapse the OLD part of a conversation into the summary only when:
+  //  - the messages were actually hard-deleted by retention (summaryArchivedAt), OR
+  //  - there is BOTH an old part AND a recent part loaded (a long, still-active chat).
+  // A conversation that is ENTIRELY older than 30 days (e.g. opened from Customers → View) must keep
+  // showing all its messages, or you couldn't read the archived chat at all.
+  const hasRecent = recentMessages.length > 0;
+  const hasOlderLoaded = messages.length > recentMessages.length;
+  const showOlderSummary =
+    !!summary?.summaryText && (!!summary?.summaryArchivedAt || (hasOlderLoaded && hasRecent));
+  const displayMessages = showOlderSummary ? recentMessages : messages;
 
   // ── Bulk multi-select helpers ──
   const toggleSelectId = (conv: any) => {
@@ -810,9 +940,9 @@ export default function ConversationsPage() {
   const deleteView = (name: string) => persistViews(savedViews.filter(v => v.name !== name));
 
   return (
-    <div className="flex flex-col h-screen bg-white overflow-hidden">
-      {/* Top Navigation Bar — hidden on mobile when in chat view */}
-      <div className={`bg-white border-b border-gray-100 px-3 sm:px-6 py-2 sm:py-3 flex items-center justify-between shadow-sm ${mobileView === 'chat' ? 'hidden sm:flex' : 'flex'}`}>
+    <div className="flex flex-col h-full bg-white overflow-hidden">
+      {/* Top Navigation Bar — hidden on mobile when in chat view; flex-shrink-0 so it never gets squeezed */}
+      <div className={`bg-white border-b border-gray-100 px-3 sm:px-6 py-2 sm:py-2.5 flex items-center justify-between gap-3 shadow-sm flex-shrink-0 ${mobileView === 'chat' ? 'hidden sm:flex' : 'flex'}`}>
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1">
           {([
             { key: 'all',       label: 'All',       icon: null },
@@ -826,8 +956,8 @@ export default function ConversationsPage() {
                 transition-all duration-150 active:scale-95 ${
                 activeFilter === key
                   ? key === 'escalated' ? 'bg-orange-600 text-white shadow-sm'
-                  : key === 'done'      ? 'bg-green-600 text-white shadow-sm'
-                  : 'bg-indigo-700 text-white shadow-sm'
+                  : key === 'done'      ? 'bg-green-100 text-green-700 shadow-sm'
+                  : 'bg-emerald-100 text-emerald-700 shadow-sm'
                   : 'text-gray-500 hover:bg-gray-100 hover:text-gray-800'
               }`}>
               {Icon && <Icon className="h-3.5 w-3.5" />}
@@ -840,8 +970,11 @@ export default function ConversationsPage() {
                 if (!n) return null;
                 return (
                   <span className={`ml-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
-                    activeFilter === key ? 'bg-white/25 text-white'
-                    : key === 'all' ? 'bg-red-500 text-white'   // unread = attention
+                    activeFilter === key
+                      ? key === 'escalated' ? 'bg-white/30 text-white'      // dark (orange) active tab
+                        : key === 'done' ? 'bg-green-600 text-white'         // light active tabs → solid chip
+                        : 'bg-emerald-600 text-white'
+                    : key === 'all' ? 'bg-red-500 text-white'                // unread = attention
                     : 'bg-gray-200 text-gray-600'
                   }`}>{n}</span>
                 );
@@ -858,7 +991,7 @@ export default function ConversationsPage() {
             {showSavedMenu && (
               <div className="absolute left-0 mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-1">
                 <button onClick={saveCurrentView}
-                  className="w-full text-left px-3 py-2 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 flex items-center gap-1.5">
+                  className="w-full text-left px-3 py-2 text-xs font-semibold text-emerald-600 hover:bg-emerald-50 flex items-center gap-1.5">
                   <Plus className="h-3.5 w-3.5" /> Save current view
                 </button>
                 {savedViews.length > 0 && <div className="border-t border-gray-100 my-1" />}
@@ -883,7 +1016,7 @@ export default function ConversationsPage() {
               : <WifiOff className="h-3.5 w-3.5 text-gray-300" />}
           </span>
           {isCRR && (
-            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 border border-indigo-100 rounded-lg text-xs font-medium text-indigo-700">
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-100 rounded-lg text-xs font-medium text-emerald-700">
               <UserCheck className="h-3.5 w-3.5" />
               My Conversations
             </span>
@@ -900,31 +1033,36 @@ export default function ConversationsPage() {
       </div>
 
       <div className="flex flex-1 overflow-hidden min-h-0">
-        {/* Left Side - Sessions List (hidden for CRR) */}
-        <div className={`${isCRR ? 'hidden' : 'hidden xl:flex xl:flex-col'} w-60 border-r border-gray-200 bg-white overflow-y-auto flex-shrink-0`}>
-          <div className="h-[57px] flex-shrink-0 flex items-center gap-2 px-3 border-b border-gray-200 bg-white">
-            <Phone className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
-            <div className="relative flex-1">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400 pointer-events-none" />
+        {/* Left Side - Sessions List (hidden for CRR). overflow-hidden + a flex column so the search
+            header stays pinned and only the session list below it scrolls. */}
+        <div className={`${isCRR ? 'hidden' : 'hidden xl:flex xl:flex-col'} w-60 border-r border-beige-200 bg-beige overflow-hidden flex-shrink-0`}>
+          <div className="h-[57px] flex-shrink-0 flex items-center px-3 border-b border-gray-200 bg-white">
+            <div className="relative w-full">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none" />
               <input
                 type="text"
                 placeholder="Search sessions…"
                 value={sessionSearch}
                 onChange={e => setSessionSearch(e.target.value)}
-                className="w-full pl-6 pr-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-300 bg-gray-50"
+                className="w-full pl-8 pr-7 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300 bg-gray-50"
               />
+              {sessionSearch && (
+                <button onClick={() => setSessionSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
           </div>
-          <div className="py-1">
+          <div className="flex-1 overflow-y-auto min-h-0 py-1">
             {/* All Sessions row */}
             <div onClick={() => { setActiveSessionId(undefined); setSelectedConv(null); setMessages([]); loadConversations(undefined); }}
               className={`px-3 py-2.5 mx-1.5 my-0.5 rounded-xl cursor-pointer transition-all duration-150 flex items-center justify-between ${
-                activeSessionId === undefined ? 'bg-indigo-50 border border-indigo-200' : 'hover:bg-gray-50 border border-transparent'
+                activeSessionId === undefined ? 'bg-emerald-50 border border-emerald-200' : 'hover:bg-gray-50 border border-transparent'
               }`}>
-              <span className={`text-xs font-semibold ${activeSessionId === undefined ? 'text-indigo-700' : 'text-gray-500'}`}>
+              <span className={`text-xs font-semibold ${activeSessionId === undefined ? 'text-emerald-700' : 'text-gray-500'}`}>
                 All Sessions
               </span>
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${activeSessionId === undefined ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'}`}>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${activeSessionId === undefined ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-600'}`}>
                 {counts?.total ?? conversations.length}
               </span>
             </div>
@@ -936,26 +1074,26 @@ export default function ConversationsPage() {
               <div key={session.id} onClick={() => handleSessionFilter(session.id)}
                 className={`px-3 py-3 mx-1.5 my-0.5 rounded-xl cursor-pointer transition-all duration-150 group ${
                   activeSessionId === session.id
-                    ? 'bg-indigo-50 border border-indigo-200 shadow-sm'
+                    ? 'bg-emerald-50 border border-emerald-200 shadow-sm'
                     : 'hover:bg-gray-50 border border-transparent'
                 }`}>
                 <div className="flex items-center gap-2.5">
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${
-                    activeSessionId === session.id ? 'bg-indigo-100' : session.isConnected ? 'bg-green-100' : 'bg-gray-100'
+                    activeSessionId === session.id ? 'bg-emerald-100' : session.isConnected ? 'bg-green-100' : 'bg-gray-100'
                   }`}>
                     <Phone className={`h-4 w-4 ${
-                      activeSessionId === session.id ? 'text-indigo-600' : session.isConnected ? 'text-green-600' : 'text-gray-400'
+                      activeSessionId === session.id ? 'text-emerald-600' : session.isConnected ? 'text-green-600' : 'text-gray-400'
                     }`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 mb-0.5">
-                      <p className={`text-xs font-semibold truncate ${activeSessionId === session.id ? 'text-indigo-700' : 'text-gray-900'}`}>
+                      <p className={`text-xs font-semibold truncate ${activeSessionId === session.id ? 'text-emerald-700' : 'text-gray-900'}`}>
                         {session.phoneNumber}
                       </p>
                       {session.isConnected && <div className="w-1.5 h-1.5 bg-green-400 rounded-full pulse-dot flex-shrink-0" />}
                     </div>
                     <div className="flex items-center justify-between">
-                      <p className={`text-xs truncate ${activeSessionId === session.id ? 'text-indigo-500' : 'text-gray-400'}`}>
+                      <p className={`text-xs truncate ${activeSessionId === session.id ? 'text-emerald-500' : 'text-gray-400'}`}>
                         {session.assignedUserName || 'Unassigned'}
                       </p>
                       {(() => {
@@ -963,7 +1101,7 @@ export default function ConversationsPage() {
                         const count = sessionCounts[session.id] ?? conversations.filter(c => c.sessionId === session.id).length;
                         return count > 0 ? (
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
-                            activeSessionId === session.id ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'
+                            activeSessionId === session.id ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-600'
                           }`}>{count}</span>
                         ) : null;
                       })()}
@@ -976,7 +1114,28 @@ export default function ConversationsPage() {
         </div>
 
         {/* Conversation List — hidden on mobile when chat is open */}
-        <div className={`${mobileView === 'chat' ? 'hidden sm:flex' : 'flex'} w-full sm:w-72 lg:w-80 border-r border-gray-200 bg-white flex-shrink-0 flex-col overflow-hidden`}>
+        <div className={`${mobileView === 'chat' ? 'hidden sm:flex' : 'flex'} w-full sm:w-72 lg:w-80 border-r border-beige-200 bg-beige flex-shrink-0 flex-col overflow-hidden`}>
+          {/* Mobile/tablet session switcher — the full session panel is xl-only, so this lets
+              smaller screens change which WhatsApp number's conversations are shown (non-CRR only). */}
+          {!isCRR && (
+            <div className="xl:hidden flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
+              <Phone className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+              <select
+                value={activeSessionId ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === '') { setActiveSessionId(undefined); setSelectedConv(null); setMessages([]); loadConversations(undefined); }
+                  else handleSessionFilter(Number(v));
+                }}
+                className="flex-1 min-w-0 text-sm border border-gray-200 rounded-lg px-2 py-1.5 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              >
+                <option value="">All Sessions ({counts?.total ?? conversations.length})</option>
+                {sessions.map((s) => (
+                  <option key={s.id} value={s.id}>{s.phoneNumber}{s.assignedUserName ? ` · ${s.assignedUserName}` : ''}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {/* Search Bar — same h-[57px] as sessions header so border-b lines align */}
           <div className="h-[57px] flex-shrink-0 flex items-center px-3 border-b border-gray-200 bg-white">
             <div className="relative w-full">
@@ -986,7 +1145,7 @@ export default function ConversationsPage() {
                 value={searchQuery}
                 onChange={e => handleSearchChange(e.target.value)}
                 placeholder={activeSessionId ? 'Search in this session…' : 'Search all sessions…'}
-                className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-gray-50"
+                className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-gray-50"
               />
               {searchQuery && (
                 <button onClick={clearSearch} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
@@ -999,7 +1158,7 @@ export default function ConversationsPage() {
             <div className="px-4 py-1 bg-gray-50 border-b border-gray-100">
               {searching
                 ? <p className="text-xs text-gray-400">{activeSessionId ? 'Searching this session…' : 'Searching all sessions…'}</p>
-                : <p className="text-xs text-indigo-500">{activeSessionId ? 'Showing results for this session' : 'Showing results across all sessions'}</p>
+                : <p className="text-xs text-emerald-500">{activeSessionId ? 'Showing results for this session' : 'Showing results across all sessions'}</p>
               }
             </div>
           )}
@@ -1010,14 +1169,14 @@ export default function ConversationsPage() {
               <div className="flex items-center justify-end px-3 py-1.5 border-b border-gray-100 bg-white">
                 <button
                   onClick={() => setSelectMode(true)}
-                  className="flex items-center gap-1.5 text-[11px] font-medium text-gray-500 hover:text-indigo-600 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors"
+                  className="flex items-center gap-1.5 text-[11px] font-medium text-gray-500 hover:text-emerald-600 px-2 py-1 rounded-lg hover:bg-emerald-50 transition-colors"
                 >
                   <Check className="h-3.5 w-3.5" /> Select
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5 px-3 py-2 border-b border-indigo-100 bg-indigo-50/60 flex-wrap">
-                <button onClick={selectAllVisible} className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 px-1.5">
+              <div className="flex items-center gap-1.5 px-3 py-2 border-b border-emerald-100 bg-emerald-50/60 flex-wrap">
+                <button onClick={selectAllVisible} className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 px-1.5">
                   {(() => {
                     const vis = searchResults !== null ? searchResults : filteredConversations;
                     return selectedIds.size === vis.length && vis.length > 0 ? 'Clear' : 'All';
@@ -1038,7 +1197,7 @@ export default function ConversationsPage() {
                   <button
                     onClick={() => setBulkMenu(m => m === 'assign' ? 'none' : 'assign')}
                     disabled={selectedIds.size === 0 || bulkBusy}
-                    className="flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-indigo-700 px-2 py-1 rounded-lg hover:bg-indigo-50 disabled:opacity-40"
+                    className="flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-emerald-700 px-2 py-1 rounded-lg hover:bg-emerald-50 disabled:opacity-40"
                   >
                     <UserCheck className="h-3.5 w-3.5" /> Assign
                   </button>
@@ -1047,7 +1206,7 @@ export default function ConversationsPage() {
                       {users.map((u: any) => (
                         <button key={u.id} onClick={() => runBulk('assign', { userId: u.id })}
                           className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 flex items-center gap-2">
-                          <span className="h-5 w-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[9px] font-bold flex-shrink-0">
+                          <span className="h-5 w-5 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-[9px] font-bold flex-shrink-0">
                             {(u.fullName ?? '?').charAt(0)}
                           </span>
                           <span className="truncate">{u.fullName} <span className="text-gray-400">({u.role})</span></span>
@@ -1071,7 +1230,7 @@ export default function ConversationsPage() {
                       {allConvTags.map((t: any) => (
                         <button key={t.id} onClick={() => runBulk('tag', { tagId: t.id })}
                           className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 flex items-center gap-2">
-                          <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: t.color || '#6366f1' }} />
+                          <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: t.color || '#10b981' }} />
                           <span className="truncate">{t.name}</span>
                         </button>
                       ))}
@@ -1105,8 +1264,8 @@ export default function ConversationsPage() {
               {/* Search results mode */}
               {searchResults !== null ? (
                 <div>
-                  <div className="px-4 py-2 bg-indigo-50 border-b border-indigo-100">
-                    <h3 className="text-xs font-semibold text-indigo-900 uppercase">
+                  <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-100">
+                    <h3 className="text-xs font-semibold text-emerald-900 uppercase">
                       Results ({searchResults.length})
                     </h3>
                   </div>
@@ -1148,8 +1307,8 @@ export default function ConversationsPage() {
                   )}
                   {activeConvs.length > 0 && (
                     <div>
-                      <div className="px-4 py-2 bg-indigo-50 border-b border-indigo-100 sticky top-0 z-20">
-                        <h3 className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Active ({searchResults ? activeConvs.length : (counts?.open ?? activeConvs.length)})</h3>
+                      <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-100 sticky top-0 z-20">
+                        <h3 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">Active ({searchResults ? activeConvs.length : (counts?.open ?? activeConvs.length)})</h3>
                       </div>
                       {activeConvs.map(conv => (
                         <ConversationItem key={conv.id} conv={conv} selectedConv={selectedConv}
@@ -1204,7 +1363,7 @@ export default function ConversationsPage() {
           {selectedConv ? (
             <>
               {/* Chat Header — min-h-[57px] matches sessions/conv-list headers for aligned border-b */}
-              <div className="bg-white border-b border-gray-200 px-4 py-0 min-h-[57px] flex items-center">
+              <div className="bg-white border-b border-gray-200 px-4 py-0 min-h-[57px] flex items-center flex-shrink-0">
                 <div className="flex items-center gap-2 sm:gap-3 w-full">
                   {/* Back button — mobile only */}
                   <button
@@ -1223,25 +1382,30 @@ export default function ConversationsPage() {
                         {selectedConv.customerName || selectedConv.customerPhone || 'Unknown Customer'}
                       </h3>
                       {selectedConv.status === 'Escalated' && (
-                        <Badge className="text-xs bg-orange-500 flex-shrink-0">
+                        <Badge className="hidden sm:inline-flex text-xs bg-orange-500 flex-shrink-0">
                           <AlertTriangle className="h-3 w-3 mr-1" />Escalated
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
-                      <span>{selectedConv.customerPhone}</span>
+                    <div className="flex items-center gap-2 sm:gap-3 text-xs text-gray-500 flex-wrap">
+                      {/* Phone: shown in the title already; repeat here only on sm+ when a distinct name is set (keeps the mobile header to one compact meta line) */}
+                      {selectedConv.customerName && selectedConv.customerName !== selectedConv.customerPhone && (
+                        <span className="hidden sm:inline truncate max-w-[130px]">{selectedConv.customerPhone}</span>
+                      )}
                       <span className="flex items-center gap-1">
                         <div className={`w-2 h-2 rounded-full ${selectedConv.status === 'Open' ? 'bg-green-500' : 'bg-gray-400'}`}></div>
                         {selectedConv.status === 'Open' ? 'Active' : selectedConv.status}
                       </span>
                       {convTags.map((t: any) => (
-                        <span key={t.id} className="flex items-center gap-1 px-2 py-0.5 rounded-full text-white text-[11px] font-medium"
-                          style={{ backgroundColor: t.color }}>
+                        <span key={t.id} className="hidden sm:flex items-center gap-1 px-2 py-0.5 rounded-full text-white text-[11px] font-medium"
+                          style={{ backgroundColor: t.color }}
+                          title={t.isAuto ? 'AI-suggested tag' : undefined}>
+                          {t.isAuto && <span className="text-[9px] leading-none opacity-90" aria-label="AI">✨</span>}
                           {t.name}
                         </span>
                       ))}
                       {customerTags.map((t: any) => (
-                        <span key={`c-${t.id}`} className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border"
+                        <span key={`c-${t.id}`} className="hidden sm:flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border"
                           style={{ color: t.color, borderColor: t.color + '66', backgroundColor: t.color + '18' }}
                           title="Customer tag">
                           {t.name}
@@ -1252,11 +1416,11 @@ export default function ConversationsPage() {
                       <div className="relative" ref={assignDropdownRef}>
                         <button
                           onClick={() => setShowAssignDropdown(!showAssignDropdown)}
-                          className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded px-2 py-0.5 bg-indigo-50"
+                          className="flex items-center gap-1 max-w-[150px] text-xs text-emerald-600 hover:text-emerald-800 border border-emerald-200 rounded px-2 py-0.5 bg-emerald-50"
                         >
-                          <UserCheck className="h-3 w-3" />
-                          {selectedConv.assignedUserName || 'Assign'}
-                          <ChevronDown className="h-3 w-3" />
+                          <UserCheck className="h-3 w-3 flex-shrink-0" />
+                          <span className="hidden sm:inline truncate">{selectedConv.assignedUserName || 'Assign'}</span>
+                          <ChevronDown className="h-3 w-3 flex-shrink-0" />
                         </button>
                         {showAssignDropdown && (
                           <div className="absolute top-full left-0 mt-1 w-52 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
@@ -1276,16 +1440,16 @@ export default function ConversationsPage() {
                                   <button
                                     key={user.id}
                                     onClick={() => handleAssign(user.id, user.fullName)}
-                                    className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${isCurrent ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
+                                    className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${isCurrent ? 'bg-emerald-50' : 'hover:bg-gray-50'}`}
                                   >
-                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 ${isCurrent ? 'bg-indigo-200 text-indigo-800' : 'bg-slate-100 text-slate-700'}`}>
+                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 ${isCurrent ? 'bg-emerald-200 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
                                       {user.fullName?.[0] ?? '?'}
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                      <p className={`font-medium text-xs truncate ${isCurrent ? 'text-indigo-700' : 'text-gray-900'}`}>{user.fullName}</p>
+                                      <p className={`font-medium text-xs truncate ${isCurrent ? 'text-emerald-700' : 'text-gray-900'}`}>{user.fullName}</p>
                                       <p className="text-gray-400 text-xs">{user.role}</p>
                                     </div>
-                                    {isCurrent && <CheckCircle2 className="h-3.5 w-3.5 text-indigo-500 flex-shrink-0" />}
+                                    {isCurrent && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />}
                                   </button>
                                 );
                               })}
@@ -1296,36 +1460,60 @@ export default function ConversationsPage() {
                     </div>
                   </div>
 
-                  {/* Quick Actions — ml-auto pushes to far right */}
-                  <div className="flex gap-1.5 sm:gap-2 flex-shrink-0 ml-auto">
-                    {/* Click-to-Call — opens phone dialer on mobile */}
-                    <a
-                      href={`tel:${selectedConv.customerPhone}`}
-                      className="flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-lg border border-green-200 bg-green-50 text-green-600 hover:bg-green-100 transition-colors"
-                      title={`Call ${selectedConv.customerPhone}`}
-                    >
-                      <Phone className="h-4 w-4" />
-                    </a>
-                    {/* Tag menu */}
+                  {/* Quick Actions — ml-auto pushes to far right. Resolve + Escalate stay primary;
+                      Call · Tags · AI Summary · Export collapse into the ⋮ menu. */}
+                  <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0 ml-auto">
+                    <Button size="sm" variant="outline" onClick={handleMarkResolved}
+                      disabled={isClosed} title="Resolve" className="text-green-600 border-green-200 hover:bg-green-50">
+                      <CheckCircle2 className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Resolve</span>
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={handleEscalate}
+                      disabled={selectedConv.status === 'Escalated' || isClosed}
+                      title="Escalate" className="text-orange-600 border-orange-200 hover:bg-orange-50">
+                      <AlertTriangle className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Escalate</span>
+                    </Button>
+
+                    {/* More actions: Call · Tags · AI Summary · Export */}
                     <div className="relative" ref={tagMenuRef}>
                       <Button size="sm" variant="outline"
-                        onClick={() => setShowTagMenu(v => !v)}
-                        className="text-indigo-600 border-indigo-200 hover:bg-indigo-50" title="Tags">
-                        <Tag className="h-4 w-4" />
+                        onClick={() => { setShowKebab(v => !v); setShowTagMenu(false); }}
+                        className="text-gray-600 border-gray-200 hover:bg-gray-50" title="More actions">
+                        <MoreVertical className="h-4 w-4" />
                       </Button>
+                      {showKebab && (
+                        <div className="absolute top-full right-0 mt-1 w-48 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1">
+                          <a href={`tel:${selectedConv.customerPhone}`} onClick={() => setShowKebab(false)}
+                            className="flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <Phone className="h-4 w-4 text-green-600" /> Call
+                          </a>
+                          <button onClick={() => { setShowKebab(false); setTagTab('conv'); setShowTagMenu(true); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <Tag className="h-4 w-4 text-emerald-600" /> Tags
+                          </button>
+                          <button onClick={() => { setShowKebab(false); setShowSummaryPanel(true); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <BrainCircuit className="h-4 w-4 text-purple-600" /> AI Summary
+                          </button>
+                          <button onClick={() => { setShowKebab(false); handleExport(); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <Download className="h-4 w-4 text-gray-500" /> Export
+                          </button>
+                        </div>
+                      )}
+                      {/* Tag menu (opened from the ⋮ menu) */}
                       {showTagMenu && (
                         <div className="absolute top-full right-0 mt-1 w-52 bg-white border border-gray-200 rounded-xl shadow-lg z-50">
                           {/* Tabs */}
                           <div className="flex border-b border-gray-100 text-xs font-semibold">
                             <button
                               onClick={() => setTagTab('conv')}
-                              className={`flex-1 px-3 py-2 rounded-tl-xl transition-colors ${tagTab === 'conv' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}`}
+                              className={`flex-1 px-3 py-2 rounded-tl-xl transition-colors ${tagTab === 'conv' ? 'bg-emerald-50 text-emerald-700' : 'text-gray-500 hover:bg-gray-50'}`}
                             >
                               Conversation
                             </button>
                             <button
                               onClick={() => setTagTab('customer')}
-                              className={`flex-1 px-3 py-2 rounded-tr-xl transition-colors ${tagTab === 'customer' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}`}
+                              className={`flex-1 px-3 py-2 rounded-tr-xl transition-colors ${tagTab === 'customer' ? 'bg-emerald-50 text-emerald-700' : 'text-gray-500 hover:bg-gray-50'}`}
                             >
                               Customer
                             </button>
@@ -1370,35 +1558,13 @@ export default function ConversationsPage() {
                         </div>
                       )}
                     </div>
-                    <Button size="sm" variant="outline" onClick={handleExport}
-                      className="text-gray-600 border-gray-200 hover:bg-gray-50" title="Export conversation">
-                      <Download className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => { setShowSummaryPanel(!showSummaryPanel); }}
-                      className="text-purple-600 border-purple-200 hover:bg-purple-50"
-                      title="AI Summary"
-                    >
-                      <BrainCircuit className="h-4 w-4" />
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={handleMarkResolved}
-                      disabled={isClosed} title="Resolve" className="text-green-600 border-green-200 hover:bg-green-50">
-                      <CheckCircle2 className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Resolve</span>
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={handleEscalate}
-                      disabled={selectedConv.status === 'Escalated' || isClosed}
-                      title="Escalate" className="text-orange-600 border-orange-200 hover:bg-orange-50">
-                      <AlertTriangle className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Escalate</span>
-                    </Button>
                   </div>
                 </div>
               </div>
 
-              <div className="flex flex-1 overflow-hidden">
-                {/* Messages area */}
-                <div className="flex flex-col flex-1 min-w-0">
+              <div className="flex flex-1 overflow-hidden min-h-0">
+                {/* Messages area — min-h-0 lets the scroll region shrink so the composer stays pinned in view */}
+                <div className="flex flex-col flex-1 min-w-0 min-h-0">
                   <div
                     ref={messagesContainerRef}
                     className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4 bg-gray-50 relative"
@@ -1416,16 +1582,37 @@ export default function ConversationsPage() {
                           messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
                           setHasNewMessage(false);
                         }}
-                        className="sticky top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-full shadow-lg hover:bg-indigo-700 transition-all"
+                        className="sticky top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 bg-emerald-100 text-emerald-700 text-xs font-medium rounded-full shadow-lg hover:bg-emerald-200 transition-all"
                       >
                         <ArrowDown className="h-3 w-3" />
                         New message
                       </button>
                     )}
-                    {messages.length === 0 ? (
+                    {/* Messages older than 30 days are collapsed into this summary (shown above the recent chat) */}
+                    {showOlderSummary && (
+                      <div className="mx-auto max-w-2xl mb-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3.5">
+                        <p className="flex items-center gap-1.5 text-[11px] font-bold text-amber-700 uppercase tracking-wide mb-1.5">
+                          <Clock className="h-3.5 w-3.5" /> Summary of older messages
+                        </p>
+                        <p className="text-sm text-gray-700 whitespace-pre-wrap">{summary.summaryText}</p>
+                        {summary.keyTopics && (
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {String(summary.keyTopics).split(',').map((t: string, i: number) => t.trim() && (
+                              <span key={i} className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-white text-amber-700 border border-amber-200">{t.trim()}</span>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-[10px] text-amber-600/80 mt-2">
+                          {summary.summaryArchivedAt
+                            ? `Messages before ${formatDate(summary.summaryArchivedAt)} were archived to this summary.`
+                            : `Messages older than ${RETENTION_DAYS} days are summarised here; the recent chat is shown below.`}
+                        </p>
+                      </div>
+                    )}
+                    {displayMessages.length === 0 && !showOlderSummary ? (
                       <div className="text-center py-12 text-gray-500">No messages in this conversation</div>
                     ) : (
-                      buildMessageGroups(messages).map((group, gi, arr) => {
+                      buildMessageGroups(displayMessages).map((group, gi, arr) => {
                         // WhatsApp-style centered date chip when the day changes
                         const gm: any = group.kind === 'album' ? group.items[0] : group.msg;
                         const prev: any = arr[gi - 1];
@@ -1458,7 +1645,7 @@ export default function ConversationsPage() {
                                   <span className="text-xs text-gray-400">{formatMessageTime(lastMsg.createdAt)}</span>
                                   <Badge variant="outline" className="text-xs bg-gray-50 text-gray-500 border-gray-200">{items.length} photos</Badge>
                                 </div>
-                                <div className={`rounded-2xl overflow-hidden max-w-full min-w-0 ${albumInbound ? 'bg-white border border-gray-200 rounded-tl-none text-gray-800' : 'bg-blue-600 text-white rounded-br-none'}`}>
+                                <div className={`rounded-2xl overflow-hidden max-w-full min-w-0 ${albumInbound ? 'bg-white border border-gray-200 rounded-tl-none text-gray-800' : 'bg-emerald-100 text-gray-800 rounded-br-none'}`}>
                                   <div className="grid grid-cols-2 gap-0.5 w-[min(72vw,264px)]">
                                     {shown.map((m: any, idx: number) => {
                                       const src = resolveMediaUrl(m.mediaUrl);
@@ -1491,7 +1678,7 @@ export default function ConversationsPage() {
                               )}
                               <button
                                 onClick={() => { setForwardMsg(lastMsg); setForwardTargets(new Set()); setForwardSearch(''); }}
-                                className={`self-center opacity-0 group-hover:opacity-100 flex-shrink-0 h-7 w-7 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-gray-400 hover:text-indigo-600 hover:border-indigo-200 transition-all ${albumInbound ? '' : 'order-first'}`}
+                                className={`self-center opacity-0 group-hover:opacity-100 flex-shrink-0 h-7 w-7 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-gray-400 hover:text-emerald-600 hover:border-emerald-200 transition-all ${albumInbound ? '' : 'order-first'}`}
                                 title="Forward"
                               >
                                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1521,7 +1708,7 @@ export default function ConversationsPage() {
                                   <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-200">AI</Badge>
                                 )}
                               </div>
-                              <div className={`rounded-2xl overflow-hidden max-w-full min-w-0 ${isInbound ? 'bg-white border border-gray-200 rounded-tl-none text-gray-800' : 'bg-blue-600 text-white rounded-br-none'}`}>
+                              <div className={`rounded-2xl overflow-hidden max-w-full min-w-0 ${isInbound ? 'bg-white border border-gray-200 rounded-tl-none text-gray-800' : 'bg-emerald-100 text-gray-800 rounded-br-none'}`}>
                                 {msg.mediaUrl && (() => {
                                   // Local files are on the backend server — prepend backend base URL
                                   const BACKEND = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
@@ -1548,7 +1735,7 @@ export default function ConversationsPage() {
                                       )}
                                       {msg.messageType === 'document' && (
                                         <a href={src} target="_blank" rel="noreferrer"
-                                          className={`flex items-center gap-2 px-4 py-3 max-w-[260px] hover:opacity-80 ${isInbound ? 'text-indigo-700' : 'text-white'}`}>
+                                          className={`flex items-center gap-2 px-4 py-3 max-w-[260px] hover:opacity-80 text-emerald-700`}>
                                           <FileText className="h-5 w-5 flex-shrink-0" />
                                           <span className="text-sm font-medium truncate min-w-0">{src.split('/').pop()?.split('?')[0]}</span>
                                           <Download className="h-4 w-4 flex-shrink-0 ml-auto" />
@@ -1560,6 +1747,12 @@ export default function ConversationsPage() {
                                 {msg.content && (
                                   <p className={`text-sm leading-relaxed px-4 py-2.5 whitespace-pre-wrap break-words ${msg.mediaUrl ? 'max-w-[260px]' : ''}`}>{msg.content}</p>
                                 )}
+                                {msg.transcript && (
+                                  <p className="text-xs px-4 pb-2.5 pt-0.5 max-w-[280px] flex items-start gap-1 text-gray-500 italic">
+                                    <span className="not-italic flex-shrink-0">🎙</span>
+                                    <span className="whitespace-pre-wrap break-words">{msg.transcript}</span>
+                                  </p>
+                                )}
                               </div>
                             </div>
                             {!isInbound && (
@@ -1570,7 +1763,7 @@ export default function ConversationsPage() {
                             {/* Forward button — inside group div, appears on hover */}
                             <button
                               onClick={() => { setForwardMsg(msg); setForwardTargets(new Set()); setForwardSearch(''); }}
-                              className={`self-center opacity-0 group-hover:opacity-100 flex-shrink-0 h-7 w-7 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-gray-400 hover:text-indigo-600 hover:border-indigo-200 transition-all ${isInbound ? '' : 'order-first'}`}
+                              className={`self-center opacity-0 group-hover:opacity-100 flex-shrink-0 h-7 w-7 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-gray-400 hover:text-emerald-600 hover:border-emerald-200 transition-all ${isInbound ? '' : 'order-first'}`}
                               title="Forward"
                             >
                               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1586,9 +1779,41 @@ export default function ConversationsPage() {
                   </div>
 
                   {/* Reply Input — sticky bottom on mobile */}
-                  <div className="bg-white border-t border-gray-200 p-3 sticky bottom-0 sm:relative">
+                  <div className="bg-white border-t border-gray-200 p-3 sticky bottom-0 sm:relative flex-shrink-0">
+                    {/* AI copilot suggestion — CRR can Send as-is, Edit, or Dismiss */}
+                    {suggestion && !isClosed && (
+                      <div className="mb-2 rounded-xl border border-violet-200 bg-violet-50/70 p-3">
+                        <div className="flex items-center justify-between mb-1.5 gap-2">
+                          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                            <span className="flex items-center gap-1 text-[11px] font-bold text-violet-700"><BrainCircuit className="h-3.5 w-3.5" /> AI Suggestion</span>
+                            {suggestion.intent && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{suggestion.intent}</span>}
+                            {suggestion.confidence != null && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">{Math.round(suggestion.confidence * 100)}% confident</span>}
+                          </div>
+                          <button onClick={dismissSuggestion} className="text-gray-400 hover:text-gray-600 flex-shrink-0" title="Dismiss"><X className="h-4 w-4" /></button>
+                        </div>
+                        <p className="text-sm text-gray-800 whitespace-pre-wrap break-words mb-2.5 max-h-40 overflow-y-auto">{suggestion.suggestedText}</p>
+                        <div className="flex items-center gap-2">
+                          <button onClick={sendSuggestion} disabled={suggestionBusy}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 disabled:opacity-50">
+                            <Send className="h-3.5 w-3.5" /> {suggestionBusy ? 'Sending…' : 'Send'}
+                          </button>
+                          <button onClick={editSuggestion} disabled={suggestionBusy}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-violet-700 bg-white border border-violet-200 rounded-lg hover:bg-violet-50 disabled:opacity-50">
+                            <Edit className="h-3.5 w-3.5" /> Edit
+                          </button>
+                          <button onClick={dismissSuggestion} disabled={suggestionBusy}
+                            className="px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700">Dismiss</button>
+                        </div>
+                      </div>
+                    )}
                     {isClosed ? (
-                      <p className="text-sm text-center text-gray-400 py-1">This conversation is closed</p>
+                      <div className="flex flex-col sm:flex-row items-center justify-center gap-2 py-1">
+                        <p className="text-sm text-gray-400">This conversation is closed.</p>
+                        <button onClick={handleReopen}
+                          className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 active:scale-95 transition-all">
+                          <RefreshCw className="h-3.5 w-3.5" /> Reopen to reply
+                        </button>
+                      </div>
                     ) : (
                       <div className="space-y-2">
 
@@ -1644,7 +1869,7 @@ export default function ConversationsPage() {
                                   <span>{uploadProgress}%</span>
                                 </div>
                                 <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                                  <div className="h-full bg-indigo-500 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
+                                  <div className="h-full bg-emerald-500 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
                                 </div>
                               </div>
                             )}
@@ -1657,7 +1882,7 @@ export default function ConversationsPage() {
                           <div className="relative" ref={quickReplyRef}>
                             <button
                               onClick={() => setShowQuickReplies(v => !v)}
-                              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 active:scale-95 transition-all"
+                              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg border border-emerald-200 active:scale-95 transition-all"
                               title="Quick replies"
                             >
                               <Zap className="h-3.5 w-3.5" />
@@ -1678,7 +1903,7 @@ export default function ConversationsPage() {
                                       {items.map((qr: any) => (
                                         <button key={qr.id}
                                           onClick={() => { setReplyText(qr.content); setShowQuickReplies(false); }}
-                                          className="w-full text-left px-3 py-2.5 hover:bg-indigo-50 transition-colors border-b border-gray-50 last:border-0">
+                                          className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 transition-colors border-b border-gray-50 last:border-0">
                                           <p className="text-xs font-semibold text-gray-800">{qr.title}</p>
                                           <p className="text-xs text-gray-400 truncate mt-0.5">{qr.content}</p>
                                         </button>
@@ -1695,11 +1920,21 @@ export default function ConversationsPage() {
                             )}
                           </div>
 
+                          {/* Catalog */}
+                          <button
+                            onClick={openCatalogPicker}
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg border border-amber-200 active:scale-95 transition-all"
+                            title="Send images from a catalog"
+                          >
+                            <Layers className="h-3.5 w-3.5" />
+                            Catalog
+                          </button>
+
                           {/* Attachment picker */}
                           <div className="relative" ref={attachMenuRef}>
                             <button
                               onClick={() => setShowAttachMenu(v => !v)}
-                              className={`p-1.5 rounded-lg border transition-all ${showAttachMenu || attachmentFile ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700'}`}
+                              className={`p-1.5 rounded-lg border transition-all ${showAttachMenu || attachmentFile ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700'}`}
                               title="Attach file"
                             >
                               <Paperclip className="h-4 w-4" />
@@ -1743,20 +1978,21 @@ export default function ConversationsPage() {
                           />
                         </div>
 
-                        {/* Text + send row */}
-                        <div className="flex items-end gap-2">
+                        {/* Text + send row — items-center so the send button sits centred against the
+                            fixed-height input (items-end left it hanging at the bottom, looking misaligned) */}
+                        <div className="flex items-center gap-2">
                           <textarea
                             value={replyText}
                             onChange={e => setReplyText(e.target.value)}
                             onKeyDown={handleKeyDown}
-                            placeholder={attachmentFile ? 'Add a caption… (optional)' : 'Type a message… (Enter to send, Shift+Enter for new line)'}
+                            placeholder={attachmentFile ? 'Add a caption… (optional)' : 'Type a message…'}
                             rows={2}
-                            className="flex-1 resize-none rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                            className="flex-1 resize-none rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                           />
                           <Button
                             onClick={handleSendReply}
                             disabled={(!replyText.trim() && attachmentFiles.length === 0) || sending || uploading}
-                            className="bg-indigo-700 hover:bg-indigo-800 text-white rounded-xl h-10 w-10 p-0 flex items-center justify-center flex-shrink-0"
+                            className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 rounded-xl h-10 w-10 p-0 flex items-center justify-center flex-shrink-0"
                           >
                             {uploading
                               ? <span className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1798,7 +2034,7 @@ export default function ConversationsPage() {
                     <div className="flex-1 overflow-y-auto p-4 space-y-4">
                       {summaryLoading ? (
                         <div className="flex items-center justify-center py-12">
-                          <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+                          <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
                         </div>
                       ) : summary ? (
                         <>
@@ -1853,7 +2089,7 @@ export default function ConversationsPage() {
                           <Button
                             size="sm"
                             onClick={handleGenerateSummary}
-                            className="bg-indigo-700 hover:bg-indigo-800 text-white gap-2"
+                            className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 gap-2"
                           >
                             <BrainCircuit className="h-4 w-4" />
                             Generate Summary
@@ -1878,61 +2114,63 @@ export default function ConversationsPage() {
 
       {/* ── Image Gallery / Lightbox ── (portaled to body so it sits above the app header/chrome) */}
       {gallery && typeof document !== 'undefined' && createPortal(
-        <div className="fixed inset-0 z-[200] bg-black/90 flex items-center justify-center select-none"
+        <div className="fixed inset-0 z-[200] bg-black/90 flex flex-col select-none"
           onClick={() => setGallery(null)}>
-          {/* counter */}
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white/90 text-sm font-medium">
-            {gallery.index + 1} / {gallery.images.length}
+          {/* Top bar — counter (centre) + download/close (right); own row so nothing overlaps the image */}
+          <div className="relative flex-shrink-0 h-14 flex items-center justify-center px-3" onClick={e => e.stopPropagation()}>
+            <span className="text-white/90 text-sm font-medium">{gallery.index + 1} / {gallery.images.length}</span>
+            <div className="absolute right-3 flex items-center gap-2">
+              <a href={gallery.images[gallery.index]} target="_blank" rel="noreferrer" download
+                className="h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
+                <Download className="h-5 w-5" />
+              </a>
+              <button onClick={() => setGallery(null)} aria-label="Close"
+                className="h-10 w-10 rounded-full bg-white/15 hover:bg-white/30 text-white flex items-center justify-center ring-1 ring-white/30">
+                <X className="h-6 w-6" />
+              </button>
+            </div>
           </div>
-          {/* close */}
-          <button onClick={() => setGallery(null)} aria-label="Close"
-            className="absolute top-4 right-4 h-11 w-11 rounded-full bg-white/15 hover:bg-white/30 text-white flex items-center justify-center ring-1 ring-white/30 shadow-lg transition-colors">
-            <X className="h-6 w-6" />
-          </button>
-          {/* download current */}
-          <a href={gallery.images[gallery.index]} target="_blank" rel="noreferrer" download
-            onClick={e => e.stopPropagation()}
-            className="absolute top-3 right-16 h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
-            <Download className="h-5 w-5" />
-          </a>
-          {/* prev */}
-          {gallery.index > 0 && (
-            <button onClick={e => { e.stopPropagation(); setGallery(g => g && { ...g, index: g.index - 1 }); }}
-              className="absolute left-3 sm:left-6 h-12 w-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
-              <ChevronLeft className="h-7 w-7" />
-            </button>
-          )}
-          {/* current image — supports swipe left/right on touch devices */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={gallery.images[gallery.index]} alt={`photo ${gallery.index + 1}`}
-            onClick={e => e.stopPropagation()}
-            onTouchStart={e => { swipeStartX.current = e.touches[0].clientX; }}
-            onTouchEnd={e => {
-              const start = swipeStartX.current;
-              swipeStartX.current = null;
-              if (start == null) return;
-              const dx = e.changedTouches[0].clientX - start;
-              if (Math.abs(dx) < 40) return;
-              setGallery(g => {
-                if (!g) return g;
-                if (dx < 0 && g.index < g.images.length - 1) return { ...g, index: g.index + 1 };
-                if (dx > 0 && g.index > 0) return { ...g, index: g.index - 1 };
-                return g;
-              });
-            }}
-            className="max-h-[72vh] max-w-[92vw] object-contain rounded-lg shadow-2xl" />
-          {/* next */}
-          {gallery.index < gallery.images.length - 1 && (
-            <button onClick={e => { e.stopPropagation(); setGallery(g => g && { ...g, index: g.index + 1 }); }}
-              className="absolute right-3 sm:right-6 h-12 w-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
-              <ChevronRight className="h-7 w-7" />
-            </button>
-          )}
-          {/* thumbnail filmstrip */}
+
+          {/* Image area — flex-1 so the image fits between the top bar and filmstrip without overlap */}
+          <div className="flex-1 min-h-0 relative flex items-center justify-center px-2">
+            {gallery.index > 0 && (
+              <button onClick={e => { e.stopPropagation(); setGallery(g => g && { ...g, index: g.index - 1 }); }}
+                className="absolute left-2 sm:left-6 z-10 h-11 w-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
+                <ChevronLeft className="h-7 w-7" />
+              </button>
+            )}
+            {/* current image — supports swipe left/right on touch devices */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={gallery.images[gallery.index]} alt={`photo ${gallery.index + 1}`}
+              onClick={e => e.stopPropagation()}
+              onTouchStart={e => { swipeStartX.current = e.touches[0].clientX; }}
+              onTouchEnd={e => {
+                const start = swipeStartX.current;
+                swipeStartX.current = null;
+                if (start == null) return;
+                const dx = e.changedTouches[0].clientX - start;
+                if (Math.abs(dx) < 40) return;
+                setGallery(g => {
+                  if (!g) return g;
+                  if (dx < 0 && g.index < g.images.length - 1) return { ...g, index: g.index + 1 };
+                  if (dx > 0 && g.index > 0) return { ...g, index: g.index - 1 };
+                  return g;
+                });
+              }}
+              className="max-h-full max-w-full object-contain rounded-lg shadow-2xl" />
+            {gallery.index < gallery.images.length - 1 && (
+              <button onClick={e => { e.stopPropagation(); setGallery(g => g && { ...g, index: g.index + 1 }); }}
+                className="absolute right-2 sm:right-6 z-10 h-11 w-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
+                <ChevronRight className="h-7 w-7" />
+              </button>
+            )}
+          </div>
+
+          {/* thumbnail filmstrip — its own row at the bottom */}
           {gallery.images.length > 1 && (
-            <div className="absolute bottom-0 left-0 right-0 bg-black/50 px-3 py-3 flex gap-2 overflow-x-auto"
+            <div className="flex-shrink-0 bg-black/50 px-3 py-2.5 overflow-x-auto"
               onClick={e => e.stopPropagation()}>
-              <div className="flex gap-2 mx-auto">
+              <div className="flex gap-2 w-max mx-auto">
                 {gallery.images.map((img, i) => (
                   <button key={i} type="button"
                     ref={i === gallery.index ? activeThumbRef : null}
@@ -1974,7 +2212,7 @@ export default function ConversationsPage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <input autoFocus type="text" placeholder="Search conversations…"
                   value={forwardSearch} onChange={e => setForwardSearch(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                  className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400" />
               </div>
             </div>
             <div className="max-h-64 overflow-y-auto px-2 pb-2">
@@ -1985,7 +2223,7 @@ export default function ConversationsPage() {
                   <label key={c.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-gray-50">
                     <input type="checkbox" checked={forwardTargets.has(c.id)}
                       onChange={() => setForwardTargets(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })}
-                      className="h-4 w-4 rounded border-gray-300 text-indigo-600" />
+                      className="h-4 w-4 rounded border-gray-300 text-emerald-600" />
                     <div className={`h-8 w-8 rounded-full ${getAvatarColor(c.id)} flex items-center justify-center text-xs font-medium flex-shrink-0`}>
                       {getInitials(c.customerName, c.customerPhone)}
                     </div>
@@ -2001,11 +2239,109 @@ export default function ConversationsPage() {
               <div className="flex gap-2">
                 <button onClick={() => setForwardMsg(null)} className="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">Cancel</button>
                 <button onClick={handleForward} disabled={forwardTargets.size === 0 || forwarding}
-                  className="px-4 py-2 text-sm bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 disabled:opacity-50 font-medium">
+                  className="px-4 py-2 text-sm bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 disabled:opacity-50 font-medium">
                   {forwarding ? 'Forwarding…' : `Forward${forwardTargets.size > 0 ? ` (${forwardTargets.size})` : ''}`}
                 </button>
               </div>
             </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ── Catalog send picker ── */}
+      {catalogPickerOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[190] flex items-center justify-center p-4" onClick={() => setCatalogPickerOpen(false)}>
+          <div className="w-full max-w-3xl max-h-[88vh] bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-amber-50">
+              <div className="flex items-center gap-2 min-w-0">
+                {catalogView && (
+                  <button onClick={() => { setCatalogView(null); setCatalogSelUrls(new Set()); }} className="text-amber-700 hover:text-amber-900" title="Back">
+                    <ChevronLeft className="h-5 w-5" />
+                  </button>
+                )}
+                <Layers className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                <h3 className="text-base font-bold text-amber-700 truncate">
+                  {catalogView ? catalogView.name : 'Send from Catalog'}
+                </h3>
+              </div>
+              <button onClick={() => setCatalogPickerOpen(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {catalogLoading ? (
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="aspect-square rounded-xl bg-gray-100 animate-pulse" />)}</div>
+              ) : !catalogView ? (
+                // Catalog list
+                catalogList.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-center">
+                    <Layers className="h-9 w-9 text-gray-300 mb-2" />
+                    <p className="text-sm font-semibold text-gray-700">No catalogs yet</p>
+                    <p className="text-xs text-gray-400">Create catalogs from the Gallery → Catalogs tab</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                    {catalogList.map((c: any) => (
+                      <button key={c.id} onClick={() => openCatalogView(c)}
+                        className="group text-left rounded-xl border border-gray-200 bg-white overflow-hidden hover:shadow-md hover:border-amber-300 transition-all">
+                        <div className="aspect-[4/3] bg-gray-100 relative">
+                          {c.coverUrl ? <img src={catalogResolveUrl(c.coverUrl)} alt="" className="h-full w-full object-cover" /> : <div className="h-full w-full flex items-center justify-center"><Layers className="h-7 w-7 text-gray-300" /></div>}
+                          <span className="absolute bottom-1.5 left-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-black/60 text-white">{c.itemCount}</span>
+                        </div>
+                        <div className="p-2.5">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{c.name}</p>
+                          {c.info && <p className="text-[11px] text-gray-400 truncate">{c.info}</p>}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )
+              ) : (
+                // Catalog images with selection
+                catalogView.items.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-center">
+                    <Layers className="h-9 w-9 text-gray-300 mb-2" />
+                    <p className="text-sm font-semibold text-gray-700">This catalog has no images</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                    {catalogView.items.map((it: any) => {
+                      const sel = catalogSelUrls.has(it.mediaUrl);
+                      return (
+                        <button key={it.id} onClick={() => toggleCatalogImg(it.mediaUrl)}
+                          className={`group relative aspect-square rounded-xl overflow-hidden bg-gray-100 border transition-all ${sel ? 'border-amber-500 ring-2 ring-amber-400' : 'border-gray-200 hover:border-amber-300'}`}>
+                          <img src={catalogResolveUrl(it.mediaUrl)} alt="" loading="lazy" className="h-full w-full object-cover" />
+                          <span className={`absolute bottom-1.5 right-1.5 h-5 w-5 rounded-md flex items-center justify-center border-2 ${sel ? 'bg-amber-500 border-amber-500' : 'bg-white/70 border-white'}`}>
+                            {sel && <Check className="h-3.5 w-3.5 text-white" />}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )
+              )}
+            </div>
+
+            {/* Footer (only in catalog view) */}
+            {catalogView && catalogView.items.length > 0 && (
+              <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-gray-100 bg-gray-50">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCatalogSelUrls(catalogSelUrls.size === Math.min(catalogView.items.length, 30) ? new Set() : new Set(catalogView.items.slice(0, 30).map((i: any) => i.mediaUrl)))}
+                    className="text-xs font-medium text-gray-600 hover:text-gray-800">
+                    {catalogSelUrls.size >= Math.min(catalogView.items.length, 30) ? 'Clear' : 'Select all (max 30)'}
+                  </button>
+                  <span className="text-xs text-gray-400">{catalogSelUrls.size} selected</span>
+                </div>
+                <button onClick={sendCatalog} disabled={catalogSelUrls.size === 0 || catalogSending}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 disabled:opacity-50">
+                  <Send className="h-4 w-4" />
+                  {catalogSending ? 'Queuing…' : `Send ${catalogSelUrls.size > 0 ? catalogSelUrls.size : ''} to chat`}
+                </button>
+              </div>
+            )}
           </div>
         </div>,
         document.body
@@ -2045,11 +2381,11 @@ function AudioPlayer({ src, isInbound }: { src: string; isInbound: boolean }) {
     audioRef.current.currentTime = ratio * duration;
   };
 
-  const bubbleBg  = isInbound ? 'bg-white border border-gray-200' : 'bg-blue-500';
-  const iconColor = isInbound ? 'text-indigo-600' : 'text-white';
-  const barBg     = isInbound ? 'bg-gray-200' : 'bg-blue-300';
-  const barFill   = isInbound ? 'bg-indigo-500' : 'bg-white';
-  const timeColor = isInbound ? 'text-gray-400' : 'text-blue-100';
+  const bubbleBg  = isInbound ? 'bg-white border border-gray-200' : 'bg-emerald-100';
+  const iconColor = isInbound ? 'text-emerald-600' : 'text-emerald-700';
+  const barBg     = isInbound ? 'bg-gray-200' : 'bg-emerald-200';
+  const barFill   = isInbound ? 'bg-emerald-500' : 'bg-emerald-500';
+  const timeColor = isInbound ? 'text-gray-400' : 'text-gray-500';
 
   return (
     <div className={`flex items-center gap-2.5 px-3 py-2.5 rounded-2xl min-w-[200px] max-w-[260px] ${bubbleBg}`}>
@@ -2070,7 +2406,7 @@ function AudioPlayer({ src, isInbound }: { src: string; isInbound: boolean }) {
       {/* Play/pause */}
       <button onClick={togglePlay}
         className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 transition-all active:scale-95 ${
-          isInbound ? 'bg-indigo-50 hover:bg-indigo-100' : 'bg-white/20 hover:bg-white/30'
+          isInbound ? 'bg-emerald-50 hover:bg-emerald-100' : 'bg-emerald-200 hover:bg-emerald-300'
         }`}>
         {playing
           ? <span className={`text-lg leading-none ${iconColor}`}>⏸</span>
@@ -2147,13 +2483,13 @@ function ConversationItem({
     <div
       onClick={() => (selectMode ? onToggleSelect?.(conv) : onSelect(conv))}
       className={`p-4 cursor-pointer hover:bg-gray-50 transition border-b border-gray-100 ${
-        selected ? 'bg-indigo-100/60' : selectedConv?.id === conv.id ? 'bg-indigo-50' : ''
+        selected ? 'bg-emerald-100/60' : selectedConv?.id === conv.id ? 'bg-emerald-50' : ''
       } ${isHighPriority ? 'bg-orange-50/30' : ''}`}
     >
       <div className="flex items-start gap-3">
         {selectMode && (
           <div className={`mt-1 h-5 w-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-            selected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300 bg-white'
+            selected ? 'bg-emerald-600 border-emerald-600' : 'border-gray-300 bg-white'
           }`}>
             {selected && <Check className="h-3.5 w-3.5 text-white" />}
           </div>
@@ -2171,12 +2507,12 @@ function ConversationItem({
             <h3 className={`text-sm truncate ${conv.isUnread ? 'font-semibold text-gray-900' : 'font-normal text-gray-700'}`}>
               {conv.customerName || conv.customerPhone || 'Unknown Customer'}
             </h3>
-            {conv.isUnread && <span className="ml-2 flex-shrink-0 h-2.5 w-2.5 rounded-full bg-indigo-600" />}
+            {conv.isUnread && <span className="ml-2 flex-shrink-0 h-2.5 w-2.5 rounded-full bg-emerald-600" />}
           </div>
           <p className="text-xs text-gray-500 mb-0.5">{conv.customerPhone}</p>
           {showSession && conv.businessPhone && (
-            <p className="text-[10px] text-indigo-500 font-medium mb-0.5 flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-400" />
+            <p className="text-[10px] text-emerald-500 font-medium mb-0.5 flex items-center gap-1">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
               {conv.businessPhone}
             </p>
           )}

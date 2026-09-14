@@ -33,7 +33,7 @@ public class ConversationRepository
     // Returns conversations joined with last message content — avoids N+1 for list views
     public async Task<List<ConversationListRow>> GetAllWithLastMessageAsync(
         string? status = null,
-        int? assignedUserId = null,
+        IReadOnlyList<int>? assignedUserIds = null,
         int? sessionId = null,
         int limit = 100,
         int offset = 0,
@@ -71,8 +71,9 @@ public class ConversationRepository
         if (!string.IsNullOrEmpty(status))
             sql += " AND c.Status = @Status";
 
-        if (assignedUserId.HasValue)
-            sql += " AND c.AssignedUserId = @AssignedUserId";
+        // null = no user filter (Admin sees all); otherwise scope to the caller's visible user set.
+        if (assignedUserIds != null)
+            sql += " AND c.AssignedUserId IN @AssignedUserIds";
 
         if (sessionId.HasValue)
             sql += " AND c.SessionId = @SessionId";
@@ -81,7 +82,7 @@ public class ConversationRepository
                   OFFSET @Offset ROWS FETCH NEXT @Limit ROWS ONLY";
 
         var result = await conn.QueryAsync<ConversationListRow>(sql,
-            new { Status = status, AssignedUserId = assignedUserId, SessionId = sessionId, Offset = offset, Limit = limit, ViewerUserId = viewerUserId });
+            new { Status = status, AssignedUserIds = assignedUserIds, SessionId = sessionId, Offset = offset, Limit = limit, ViewerUserId = viewerUserId });
         return result.ToList();
     }
 
@@ -100,13 +101,13 @@ public class ConversationRepository
     }
 
     /// <summary>Total / open / escalated / closed / unread counts for the same filters as the list (ignores paging).</summary>
-    public async Task<ConversationCounts> GetCountsAsync(int? assignedUserId = null, int? sessionId = null, int? viewerUserId = null)
+    public async Task<ConversationCounts> GetCountsAsync(IReadOnlyList<int>? assignedUserIds = null, int? sessionId = null, int? viewerUserId = null)
     {
         using var conn = _db.CreateConnection();
         var filter = " WHERE 1=1";
-        if (assignedUserId.HasValue) filter += " AND c.AssignedUserId = @AssignedUserId";
+        if (assignedUserIds != null) filter += " AND c.AssignedUserId IN @AssignedUserIds";
         if (sessionId.HasValue)      filter += " AND c.SessionId = @SessionId";
-        var p = new { AssignedUserId = assignedUserId, SessionId = sessionId, ViewerUserId = viewerUserId };
+        var p = new { AssignedUserIds = assignedUserIds, SessionId = sessionId, ViewerUserId = viewerUserId };
 
         var counts = await conn.QueryFirstOrDefaultAsync<ConversationCounts>($@"
             SELECT
@@ -133,15 +134,16 @@ public class ConversationRepository
     }
 
     /// <summary>Total conversations per session (optionally scoped to one assigned user) — accurate, not page-limited.</summary>
-    public async Task<List<SessionConvCount>> GetCountsBySessionAsync(int? assignedUserId = null)
+    public async Task<List<SessionConvCount>> GetCountsBySessionAsync(IReadOnlyList<int>? assignedUserIds = null)
     {
         using var conn = _db.CreateConnection();
         var sql = @"
             SELECT SessionId, COUNT(*) AS [Count]
             FROM Conversations
-            WHERE (@AssignedUserId IS NULL OR AssignedUserId = @AssignedUserId)
-            GROUP BY SessionId";
-        var rows = await conn.QueryAsync<SessionConvCount>(sql, new { AssignedUserId = assignedUserId });
+            WHERE 1=1";
+        if (assignedUserIds != null) sql += " AND AssignedUserId IN @AssignedUserIds";
+        sql += " GROUP BY SessionId";
+        var rows = await conn.QueryAsync<SessionConvCount>(sql, new { AssignedUserIds = assignedUserIds });
         return rows.ToList();
     }
 
@@ -208,6 +210,14 @@ public class ConversationRepository
         return rows > 0;
     }
 
+    /// <summary>Record the retention cutoff after purging old messages — drives the chat "summary of older messages" banner.</summary>
+    public async Task SetSummaryArchivedAtAsync(int conversationId, DateTime at)
+    {
+        using var conn = _db.CreateConnection();
+        await conn.ExecuteAsync("UPDATE Conversations SET SummaryArchivedAt = @At WHERE Id = @Id",
+            new { Id = conversationId, At = at });
+    }
+
     public async Task<bool> UpdateAssignedUserAsync(int conversationId, int assignedUserId)
     {
         using var conn = _db.CreateConnection();
@@ -216,7 +226,7 @@ public class ConversationRepository
         return rows > 0;
     }
 
-    public async Task<List<ConversationListRow>> SearchAsync(string query, int limit = 30, int? assignedUserId = null)
+    public async Task<List<ConversationListRow>> SearchAsync(string query, int limit = 30, IReadOnlyList<int>? assignedUserIds = null)
     {
         using var conn = _db.CreateConnection();
         var sql = @"
@@ -234,12 +244,12 @@ public class ConversationRepository
                 WHERE ConversationId = c.Id
                 ORDER BY CreatedAt DESC
             )
-            WHERE (c.CustomerPhone LIKE @Query OR c.CustomerName LIKE @Query)
-              AND (@AssignedUserId IS NULL OR c.AssignedUserId = @AssignedUserId)
-            ORDER BY c.LastMessageAt DESC, c.CreatedAt DESC";
+            WHERE (c.CustomerPhone LIKE @Query OR c.CustomerName LIKE @Query)";
+        if (assignedUserIds != null) sql += " AND c.AssignedUserId IN @AssignedUserIds";
+        sql += " ORDER BY c.LastMessageAt DESC, c.CreatedAt DESC";
 
         var result = await conn.QueryAsync<ConversationListRow>(sql,
-            new { Query = $"%{query}%", Limit = limit, AssignedUserId = assignedUserId });
+            new { Query = $"%{query}%", Limit = limit, AssignedUserIds = assignedUserIds });
         return result.ToList();
     }
 

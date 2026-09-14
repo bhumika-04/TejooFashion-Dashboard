@@ -118,6 +118,26 @@ public class EscalationRepository
         return rows > 0;
     }
 
+    /// <summary>Transition status only (Pending → InProgress, etc.) — used by the dashboard's status buttons.</summary>
+    public async Task<bool> UpdateStatusAsync(int id, string status)
+    {
+        using var conn = _db.CreateConnection();
+        var rows = await conn.ExecuteAsync(
+            "UPDATE Escalations SET Status = @Status WHERE Id = @Id",
+            new { Id = id, Status = status });
+        return rows > 0;
+    }
+
+    /// <summary>Reassign an open escalation to another user and reset the timeout clock (same level).</summary>
+    public async Task<bool> ReassignAsync(int id, int newUserId)
+    {
+        using var conn = _db.CreateConnection();
+        var rows = await conn.ExecuteAsync(
+            "UPDATE Escalations SET EscalatedToUserId = @NewUserId, LastEscalatedAt = GETUTCDATE() WHERE Id = @Id",
+            new { Id = id, NewUserId = newUserId });
+        return rows > 0;
+    }
+
     /// <summary>
     /// Resolves any active (Pending/InProgress) escalation on a conversation — called when the
     /// conversation is closed so the timeout matrix stops bumping/notifying on a closed conversation.
@@ -164,6 +184,8 @@ public class EscalationDetailRow
     public DateTime EscalatedAt { get; set; }
     public DateTime? ResolvedAt { get; set; }
     public string? ResolutionNotes { get; set; }
+    public int EscalationLevel { get; set; } = 1;
+    public DateTime? LastEscalatedAt { get; set; }
     // Joined fields
     public string? CustomerPhone { get; set; }
     public string? CustomerName { get; set; }

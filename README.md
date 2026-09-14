@@ -23,7 +23,8 @@ Customer → WhatsApp → BSP (Interakt/Meta) → Webhook → Backend (ASP.NET C
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
-| Backend | ASP.NET Core 8.0, Dapper |
+| Backend | ASP.NET Core (.NET 10), raw ADO.NET (`Microsoft.Data.SqlClient`) |
+| Migrations | DbUp — auto-runs embedded SQL scripts on startup |
 | Database | SQL Server Express (`AAD87525\SQLEXPRESS`, DB: `Tejoo`) |
 | AI | OpenAI GPT-4o-mini |
 | Real-time | SignalR (`NotificationHub`) |
@@ -35,51 +36,45 @@ Customer → WhatsApp → BSP (Interakt/Meta) → Webhook → Backend (ASP.NET C
 ```
 TejooFashion(Dashboard)/
 ├── backend/
-│   ├── Controllers/        # 14 API controllers
+│   ├── Controllers/        # 23 API controllers
 │   ├── Services/           # Business logic + background services
 │   ├── AI/                 # PromptLoader, PromptRouter, OpenAiClient
-│   ├── Repositories/       # 16 Dapper repositories
+│   ├── Repositories/       # 21 data repositories (raw ADO.NET via DatabaseHelper)
 │   ├── Models/
-│   │   ├── Entities/       # 13 DB models
+│   │   ├── Entities/       # DB models
 │   │   └── DTOs/           # API contracts
 │   ├── Security/           # HMAC webhook validation
 │   ├── Utilities/          # DatabaseHelper, Logger
 │   ├── Program.cs
 │   └── appsettings.json
 ├── frontend/
-│   ├── app/dashboard/      # 13 pages
+│   ├── app/dashboard/      # 19 pages
 │   ├── components/         # UI, layout, modals
 │   ├── services/api.ts     # All API endpoints
 │   └── hooks/              # usePermissions, useSignalR
-├── database/
-│   └── migrations/         # 12 numbered SQL migrations (all applied)
-└── docs/                   # Deployment & implementation guides
+└── docs/                   # Deployment checklist + client deck (.pptx)
 ```
+
+> **Note:** the `database/migrations/` folder has been removed — the schema is fully applied to the live DB; regenerate a full script from the live database when standing up a new environment (DbUp still runs any `..\database\migrations\*.sql` it finds at build time, currently none). See *Pending / Known Limitations*.
 
 ## Getting Started
 
 ### Prerequisites
-- .NET 8.0 SDK
+- .NET 10.0 SDK
 - Node.js 18+
 - SQL Server 2019+ (Express or full)
 - OpenAI API Key
 - Interakt or Meta WhatsApp API credentials
 
-### 1. Database Setup
+### 1. Configure Backend
 
-Run migrations in order using sqlcmd:
+The real `backend/appsettings.json` is gitignored (it holds secrets). Copy the template and fill in your values:
 
 ```bash
-# Connect to your SQL Server instance
-sqlcmd -S "YOUR_SERVER\SQLEXPRESS" -d Tejoo -i database/migrations/003_add_phone_teamid_to_users.sql
-# ... continue through 014_QuickReplies.sql
+cp backend/appsettings.example.json backend/appsettings.json
 ```
 
-Current server: `AAD87525\SQLEXPRESS`
-
-### 2. Configure Backend
-
-Update `backend/appsettings.json`:
+Then edit `backend/appsettings.json`:
 
 ```json
 {
@@ -95,9 +90,26 @@ Update `backend/appsettings.json`:
     "Issuer": "TejooWhatsApp",
     "Audience": "TejooWhatsAppClient",
     "ExpiryMinutes": 480
+  },
+  "Database": {
+    "RunMigrationsOnStartup": true
+  },
+  "ExternalApis": {
+    "PublicBaseUrl": "https://your-ngrok-or-public-url"
   }
 }
 ```
+
+> `ExternalApis:PublicBaseUrl` must point to a publicly reachable URL (ngrok in dev). It is used for inbound webhooks and so the WhatsApp BSP can fetch agent-sent media. Free ngrok URLs change on every restart — update this and restart the backend when that happens.
+
+### 2. Database Setup
+
+The schema is already applied to the live DB, and **the `database/migrations/` SQL scripts have been removed**. DbUp still runs on startup (`Database:RunMigrationsOnStartup`, default on) but now finds no embedded scripts, so it no-ops.
+
+- **Existing database:** nothing to do — point `DefaultConnection` at your server and run the backend.
+- **Fresh / new database:** there are no migration scripts to build the schema automatically. First generate a full script from the live `Tejoo` database (SSMS → *Tasks → Generate Scripts*, or `mssql-scripter -S "AAD87525\SQLEXPRESS" -d Tejoo --schema-and-data > tejoo_full.sql`), run it against the new DB, **then** start the backend.
+
+To disable the (currently no-op) DbUp pass, set `Database:RunMigrationsOnStartup` to `false`.
 
 ### 3. Run Backend
 
@@ -124,9 +136,12 @@ npm run dev
 | Overview | `/dashboard/overview` | All roles |
 | Sessions | `/dashboard/sessions` | Admin, HOD, Manager |
 | Conversations | `/dashboard/conversations` | All roles |
+| Customers | `/dashboard/customers` | All roles (CRR: own) |
+| Gallery | `/dashboard/gallery` | All roles (CRR: own media) |
 | Escalations | `/dashboard/escalations` | All roles |
 | Reports & Analytics | `/dashboard/reports` | Admin, HOD, Manager |
 | Performance | `/dashboard/performance` | Admin, HOD, Manager |
+| Quick Replies | `/dashboard/quick-replies` | All roles |
 | Teams | `/dashboard/teams` | Admin, HOD, Manager |
 | Users | `/dashboard/users` | Admin, HOD |
 | Role Management | `/dashboard/role-management` | Admin only |
@@ -145,14 +160,18 @@ GET  /api/webhook/meta         Meta webhook verification
 
 ### Conversations
 ```
-GET  /api/conversations                        List conversations
-GET  /api/conversations/{id}                   Get details
+GET  /api/conversations?status=&limit=100&offset=  List (paged; status filters server-side; CRR scoped to own)
+GET  /api/conversations/count                  Open/Escalated/Closed/Unread counts (same filters)
+GET  /api/conversations/search?q=              Search (CRR scoped server-side)
+GET  /api/conversations/{id}                   Get details (CRR: 404 if not theirs)
 POST /api/conversations/{id}/send-message      Send manual message
 PUT  /api/conversations/{id}/status            Update status
 POST /api/conversations/{id}/close             Mark resolved
 POST /api/conversations/{id}/assign            Assign to user
+POST /api/conversations/bulk                   Bulk close/assign/tag (Admin/HOD/Manager)
 GET  /api/conversations/{id}/summary           AI-generated summary
 ```
+Bulk body: `{ ids:[…], action:"close"|"assign"|"tag", userId?, tagId? }`. Bulk close updates status only — the background summarizer generates summaries (no per-item OpenAI call).
 
 ### Escalations
 ```
@@ -189,12 +208,47 @@ DELETE /api/teams/{id}/members/{userId}  Remove member
 GET    /api/teams/{id}/hierarchy  Team hierarchy
 ```
 
+### Customers
+```
+GET /api/customers?search=&page=1&pageSize=20&tagId=  List customers (search + tag filter)
+GET /api/customers/{id}                               Get customer
+GET /api/customers/{id}/conversations                 Customer conversation history
+PUT /api/customers/{id}                               Update name/email/notes
+GET /api/customers/stats                              Customer KPIs
+POST   /api/customers/{id}/tags/{tagId}               Add customer tag
+DELETE /api/customers/{id}/tags/{tagId}               Remove customer tag
+POST   /api/customers/bulk-tag                         Bulk add/remove a tag on selected customers
+```
+The Customers page is a **table** (Sr. No. · Mobile · Name · Total Conv · Conv Tag · Customer Tag · Last Status); the list query also returns `TagsRaw` (customer tags), `ConvTagsRaw` (distinct tags across the customer's conversations) and `LastStatus` (status of the latest conversation). A single toolbar holds **search + a Filter dropdown** (the `customer`-type tags as chips → passes `tagId` server-side) **+ CSV Export** (all matching rows). Clicking a row opens the detail in a **popup modal** (portaled above the chrome); paging is server-side via the shared `Pagination` control.
+
+### Gallery
+```
+GET /api/gallery?type=image&page=1&pageSize=102   Paged media gallery, newest first (CRR scoped to own conversations' media)
+```
+Returns `{ items:[{ id, mediaUrl, messageType, direction, content, createdAt, conversationId, customerName, customerPhone }], total, page, pageSize }`. `pageSize` is capped at 200. The page renders a responsive thumbnail grid with a lightbox (keyboard nav, "Open chat", "Full size") and server-side paging (102/page). Local `/media/...` URLs are served by the backend; inbound provider (CDN) URLs are returned as-is.
+
 ### Reports & Performance
 ```
-GET /api/reports/dashboard           Dashboard statistics
-GET /api/reports/conversation-trends Conversation trends
+GET /api/reports/dashboard                       Dashboard statistics
+GET /api/reports/conversation-trends?days=7      Conversation trends (zero-filled date series)
+GET /api/reports/hourly-distribution?days=7      Message Activity by Hour (24-row heatmap, IST)
+GET /api/reports/top-customers?days=7&top=10     Most active customers
+GET /api/reports/response-sla?days=7&slaMinutes=30  First-response-time SLA (overall + per-agent)
+GET /api/reports/intent-trends?days=7            Conversation-tag (intent) distribution
+GET /api/reports/tag-distribution?type=conversation|customer&days=7  Tag-wise report (conversation or customer tags)
+GET /api/reports/resolution?days=7               Resolution & handling: AI/human/no-reply split, escalation rate, by reason/level
+GET /api/reports/period-comparison?days=7        Current vs previous window (conversations, inbound, AI, new customers) for ▲/▼ KPI deltas
 GET /api/reports/performance?period=today|week|month  Agent performance
 ```
+The "Message Activity by Hour" heatmap has its own **Last 7 / 30 / 90 days** selector (independent of the page-level period). All date/hour reporting buckets in **IST** (UTC + 5:30). The SLA report separates **unanswered** (no recorded outbound — usually replied on the Interakt mobile app) from genuine **late breaches**; unanswered is NOT a breach.
+
+### System / Ops (Admin, HOD)
+```
+GET  /api/system/queue-health           Inbox queue status + ngrok/public-URL health
+POST /api/system/queue/{id}/retry       Re-queue a dead-lettered job
+POST /api/system/queue/{id}/discard     Set aside a dead letter (status → Discarded)
+```
+Surfaces the `InboxMessages` queue: Pending / Processing / Retrying / DeadLetter / Done-today counts, oldest-unprocessed backlog age, and a dead-letter table. The processor auto-reclaims rows stuck in `Processing` for >5 min (crash recovery; safe via `ProviderMessageId` dedup). Processed rows (`Done`/`Discarded`) older than 7 days are purged daily by `MediaCleanupService` so the queue table stays bounded; active rows and dead-letters are kept.
 
 ### Settings
 ```
@@ -223,8 +277,10 @@ DELETE /api/quickreplies/{id}    Delete template
 
 ### 2. SQL-Backed Message Queue (Outbox Pattern)
 - `InboxMessages` table with atomic batch pickup (UPDLOCK/READPAST)
-- Status lifecycle: Pending → Processing → Done/Failed/DeadLetter
-- Prevents duplicate processing under load
+- Status lifecycle: Pending → Processing → Done / Failed (retries up to MaxRetries) → DeadLetter; admins can Retry or Discard dead letters
+- Stale `Processing` rows (>5 min) auto-reclaimed on next pickup (crash recovery)
+- Processed rows purged after 7 days to keep the table bounded
+- Prevents duplicate processing under load (`ProviderMessageId` idempotency)
 
 ### 3. AI-Powered Routing
 - Router prompt classifies intent (general, followup, order_status, payment_query)
@@ -302,7 +358,8 @@ https://your-domain.com/api/webhook/meta
 - HMAC-SHA256 webhook signature validation (Interakt + Meta)
 - BCrypt password hashing
 - JWT authentication (configured, enforce in middleware for production)
-- Parameterized queries via Dapper (no SQL injection)
+- Parameterized queries via `Microsoft.Data.SqlClient` (no SQL injection)
+- `appsettings.json` (secrets) is gitignored; commit only `appsettings.example.json`
 
 ## Production Checklist
 
@@ -310,7 +367,8 @@ Before going live, see `docs/DEPLOYMENT_CHECKLIST.md`. Key items:
 - [ ] Enable JWT auth in `middleware.ts` (currently bypassed for dev)
 - [ ] Remove `<DevRoleSwitcher />` from dashboard layout
 - [ ] Remove `ensureDevUser()` from dashboard layout
-- [ ] Move OpenAI API key to environment variable / Azure Key Vault
+- [ ] Provide a production `backend/appsettings.json` with real keys (gitignored — never committed)
+- [ ] Set `ExternalApis:PublicBaseUrl` to a stable public domain (not ngrok)
 - [ ] Set `ASPNETCORE_ENVIRONMENT=Production`
 - [ ] Configure HTTPS
 
@@ -331,6 +389,13 @@ Before going live, see `docs/DEPLOYMENT_CHECKLIST.md`. Key items:
 1. Verify SQL Server is running: `services.msc`
 2. Check connection string in `appsettings.json`
 3. Test: `sqlcmd -S "AAD87525\SQLEXPRESS" -d Tejoo -Q "SELECT 1"`
+
+---
+
+## Pending / Known Limitations
+
+- **WhatsApp two-way sync — pending Interakt feature (`smb_message_echoes`).** Today we cannot capture messages an agent sends from the **WhatsApp Business mobile app** (only customer-inbound + our own API/template sends are visible), so the dashboard isn't a complete mirror of every conversation. Interakt's product team has **accepted** the `smb_message_echoes` webhook (Meta **Coexistence** — echoes app-sent messages back to the webhook); **ETA ~2–3 weeks** as of Jun 2026. When it lands we must: (1) subscribe to/relay `smb_message_echoes` and store the echoed outbound messages, and (2) optionally subscribe to the separate Coexistence **`history`** webhook to back-fill past chats (fires on the business approving chat-history sharing). Interim: agents reply via the dashboard/API (those are captured). Numbers must be **Coexistence-enabled**, and Interakt must **forward** these events to our webhook URL.
+- **Inbound media is not re-hosted locally.** Incoming media is stored as Interakt's CDN URL directly on the message (`Messages.MediaUrl`); we rely on Interakt's CDN expiry. `MediaStorageService.DownloadAndSaveAsync` (download + re-host under `wwwroot/media/`) is built and DI-registered but **not wired into the inbound flow**. Wire it into `WhatsAppOrchestrator` before `SaveInboundMessageAsync` so media is permanent and independent of Interakt's CDN. **Becomes required** once `smb_message_echoes` / Coexistence `history` webhooks land — Meta media URLs are short-lived (≈minutes) and must be downloaded on receipt.
 
 ---
 

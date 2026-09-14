@@ -53,6 +53,8 @@ public class AgentPerformanceDTO
     public int EscalationsReceived { get; set; }
     public int EscalationsResolved { get; set; }
     public double? AvgResponseTimeMinutes { get; set; }
+    public int SlaMet { get; set; }        // conversations answered within their number's SLA
+    public int SlaResponded { get; set; }  // conversations that got any first response
 }
 
 public class AgentStatsDTO
@@ -169,4 +171,30 @@ public class PerformanceComparison
     public double? AvgResponseMinutesCurrent { get; set; }
     public double? AvgResponseMinutesPrevious { get; set; }
     public int AgentsActiveCurrent { get; set; }
+}
+
+/// <summary>Customer sentiment analytics from conversation summaries over a period.</summary>
+public class SentimentAnalyticsDTO
+{
+    public int Positive { get; set; }
+    public int Neutral { get; set; }
+    public int Negative { get; set; }
+    public double AvgScore { get; set; }
+    public int Total => Positive + Neutral + Negative;
+    public List<SentimentTrendPoint> Trend { get; set; } = new();
+}
+
+public class SentimentTrendPoint
+{
+    public DateTime Date { get; set; }
+    public double AvgScore { get; set; }
+    public int Count { get; set; }
+}
+
+/// <summary>One day's average first-response time (minutes) — for the response-time trend line.</summary>
+public class ResponseTimeTrendPoint
+{
+    public DateTime Date { get; set; }
+    public double AvgResponseMinutes { get; set; }
+    public int Count { get; set; }
 }

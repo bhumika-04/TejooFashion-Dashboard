@@ -23,6 +23,14 @@ const config = {
     },
     extend: {
       colors: {
+        // Cool sage off-white canvas — belongs to the emerald brand palette so it
+        // complements the green accents (kept the "beige" key to avoid churn).
+        beige: {
+          DEFAULT: "#f1f5f2",
+          50: "#f7faf8",
+          100: "#e8efe9",
+          200: "#d8e4da",
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",

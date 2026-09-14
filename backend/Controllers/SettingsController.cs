@@ -43,6 +43,33 @@ public class SettingsController : ControllerBase
         return Ok(new { success = true });
     }
 
+    // ── Conversation Retention (30-day, default OFF) ────────────────────────────
+
+    [HttpGet("retention")]
+    public async Task<IActionResult> GetRetention()
+    {
+        var all = await _settings.GetByPrefixAsync("conversation.");
+        return Ok(new
+        {
+            enabled = string.Equals(all.GetValueOrDefault("conversation.retentionEnabled", "false"), "true", StringComparison.OrdinalIgnoreCase),
+            days    = int.TryParse(all.GetValueOrDefault("conversation.retentionDays", "30"), out var d) ? d : 30
+        });
+    }
+
+    [HttpPut("retention")]
+    public async Task<IActionResult> UpdateRetention([FromBody] RetentionRequest req)
+    {
+        if (req.Days < 1 || req.Days > 3650)
+            return BadRequest(new { error = "days must be 1–3650" });
+
+        await _settings.SetManyAsync(new Dictionary<string, string>
+        {
+            ["conversation.retentionEnabled"] = req.Enabled ? "true" : "false",
+            ["conversation.retentionDays"]    = req.Days.ToString()
+        });
+        return Ok(new { success = true });
+    }
+
     // ── Business Hours ──────────────────────────────────────────────────────────
 
     [HttpGet("business-hours")]
@@ -102,3 +129,4 @@ public class SettingsController : ControllerBase
 public record EscalationPolicyRequest(string Mode, int ConfidenceThreshold);
 public record BusinessHoursRequest(bool Enabled, string Start, string End, string Timezone);
 public record AutoCloseRequest(bool Enabled, int InactiveHours);
+public record RetentionRequest(bool Enabled, int Days);

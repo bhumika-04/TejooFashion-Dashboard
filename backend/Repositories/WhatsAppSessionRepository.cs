@@ -41,13 +41,15 @@ public class WhatsAppSessionRepository
     }
 
     // Returns sessions with assigned user name in a single query — avoids N+1
-    public async Task<List<WhatsAppSessionWithUser>> GetAllWithUserAsync(bool? isActive = null, int? assignedUserId = null)
+    public async Task<List<WhatsAppSessionWithUser>> GetAllWithUserAsync(bool? isActive = null, IReadOnlyList<int>? assignedUserIds = null)
     {
         using var conn = _db.CreateConnection();
         // "Messages today" is computed LIVE from the Messages table (IST day), not the stored
         // WhatsAppSessions.MessagesToday counter — that counter is cumulative and never resets,
         // so it would show an all-time total mislabelled as "today". This column is selected LAST
         // so it overrides ws.MessagesToday in the row mapper.
+        // Counts INBOUND (customer) messages only — the KPI reflects real customer activity, not
+        // automated/agent outbound sends.
         var sql = @"
             SELECT ws.*, u.FullName AS AssignedUserName,
                    (SELECT MAX(m.CreatedAt)
@@ -58,8 +60,16 @@ public class WhatsAppSessionRepository
                       FROM Messages m
                       INNER JOIN Conversations c ON c.Id = m.ConversationId
                       WHERE c.SessionId = ws.Id
+                        AND m.Direction = 'inbound'
                         AND CAST(DATEADD(MINUTE,330,m.CreatedAt) AS DATE)
-                          = CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE)) AS MessagesToday
+                          = CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE)) AS MessagesToday,
+                   (SELECT COUNT(*)
+                      FROM Messages m
+                      INNER JOIN Conversations c ON c.Id = m.ConversationId
+                      WHERE c.SessionId = ws.Id
+                        AND m.Direction = 'outbound'
+                        AND CAST(DATEADD(MINUTE,330,m.CreatedAt) AS DATE)
+                          = CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE)) AS OutboundToday
             FROM WhatsAppSessions ws
             LEFT JOIN Users u ON ws.AssignedUserId = u.Id
             WHERE 1=1";
@@ -67,12 +77,12 @@ public class WhatsAppSessionRepository
         if (isActive.HasValue)
             sql += " AND ws.IsActive = @IsActive";
 
-        if (assignedUserId.HasValue)
-            sql += " AND ws.AssignedUserId = @AssignedUserId";
+        if (assignedUserIds != null)
+            sql += " AND ws.AssignedUserId IN @AssignedUserIds";
 
         sql += " ORDER BY ws.CreatedAt DESC";
 
-        var result = await conn.QueryAsync<WhatsAppSessionWithUser>(sql, new { IsActive = isActive, AssignedUserId = assignedUserId });
+        var result = await conn.QueryAsync<WhatsAppSessionWithUser>(sql, new { IsActive = isActive, AssignedUserIds = assignedUserIds });
         return result.ToList();
     }
 
@@ -82,11 +92,11 @@ public class WhatsAppSessionRepository
         var sql = @"
             INSERT INTO WhatsAppSessions
             (Provider, PhoneNumber, AssignedUserId, InteraktApiKey,
-             MetaPhoneNumberId, MetaAccessToken, IsConnected, IsActive, AutoReplyEnabled, MessagesToday,
+             MetaPhoneNumberId, MetaAccessToken, IsConnected, IsActive, AutoReplyEnabled, AiMode, SlaMinutes, MessagesToday,
              LastActiveAt, LastConnectedAt, CreatedAt, UpdatedAt)
             VALUES
             (@Provider, @PhoneNumber, @AssignedUserId, @InteraktApiKey,
-             @MetaPhoneNumberId, @MetaAccessToken, @IsConnected, @IsActive, @AutoReplyEnabled, @MessagesToday,
+             @MetaPhoneNumberId, @MetaAccessToken, @IsConnected, @IsActive, @AutoReplyEnabled, @AiMode, @SlaMinutes, @MessagesToday,
              @LastActiveAt, @LastConnectedAt, @CreatedAt, @UpdatedAt);
             SELECT CAST(SCOPE_IDENTITY() as int);";
 
@@ -107,6 +117,8 @@ public class WhatsAppSessionRepository
                 IsConnected = @IsConnected,
                 IsActive = @IsActive,
                 AutoReplyEnabled = @AutoReplyEnabled,
+                AiMode = @AiMode,
+                SlaMinutes = @SlaMinutes,
                 MessagesToday = @MessagesToday,
                 LastActiveAt = @LastActiveAt,
                 LastConnectedAt = @LastConnectedAt,
@@ -174,4 +186,5 @@ public class WhatsAppSessionWithUser : TejooWhatsApp.Models.Entities.WhatsAppSes
 {
     public string AssignedUserName { get; set; } = string.Empty;
     public DateTime? LastInboundAt { get; set; }   // newest inbound message across this session's conversations
+    public int OutboundToday { get; set; }         // outbound messages today (IST); MessagesToday holds inbound
 }

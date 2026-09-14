@@ -58,7 +58,7 @@ const PROMPT_KEY_META: Record<string, { label: string; desc: string; color: stri
   followup_query: {
     label: 'Follow-up',
     desc: 'Handles follow-up messages and conversations that need continuity.',
-    color: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+    color: 'bg-emerald-100 text-emerald-700 border-emerald-200',
   },
 };
 
@@ -134,13 +134,13 @@ export default function AiPromptsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="h-7 w-7 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+        <div className="h-7 w-7 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="bg-white min-h-screen p-4 sm:p-6 lg:p-8">
+    <div className="bg-beige min-h-screen p-4 sm:p-6 lg:p-8">
       <div className="max-w-5xl mx-auto">
       {/* Refresh */}
       <div className="flex justify-end mb-6">
@@ -248,7 +248,7 @@ function PromptCard({
   };
 
   return (
-    <div className={`bg-white border rounded-xl overflow-hidden shadow-sm transition-shadow duration-200 hover:shadow-md ${isEditing ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-gray-100'} ${!prompt.isActive ? 'opacity-60' : ''}`}>
+    <div className={`bg-white border rounded-xl overflow-hidden shadow-sm transition-shadow duration-200 hover:shadow-md ${isEditing ? 'border-emerald-300 ring-1 ring-emerald-200' : 'border-gray-100'} ${!prompt.isActive ? 'opacity-60' : ''}`}>
       {/* Card Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50/50">
         <div className="flex items-center gap-3">
@@ -291,7 +291,7 @@ function PromptCard({
                 size="sm"
                 onClick={onSave}
                 disabled={saving || !editText.trim()}
-                className="gap-1.5 text-xs bg-indigo-700 hover:bg-indigo-800 text-white"
+                className="gap-1.5 text-xs bg-emerald-100 hover:bg-emerald-200 text-emerald-700"
               >
                 <Save className="h-3.5 w-3.5" />
                 {saving ? 'Saving…' : 'Save'}
@@ -321,7 +321,7 @@ function PromptCard({
                 value={editDesc}
                 onChange={e => onDescChange(e.target.value)}
                 placeholder="Short description of what this prompt does"
-                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
             <div>
@@ -332,7 +332,7 @@ function PromptCard({
                 value={editText}
                 onChange={e => onTextChange(e.target.value)}
                 rows={12}
-                className="w-full text-sm font-mono border border-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y leading-relaxed"
+                className="w-full text-sm font-mono border border-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y leading-relaxed"
                 placeholder="Enter the system prompt…"
               />
               <p className="text-xs text-gray-400 mt-1">{editText.length} characters</p>

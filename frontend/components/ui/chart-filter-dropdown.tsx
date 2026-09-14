@@ -11,6 +11,7 @@ export type FilterRange =
   | 'This Month'
   | 'Last Month'
   | 'Last 3 Months'
+  | 'All Time'
   | 'Custom Range';
 
 const FILTER_OPTIONS: FilterRange[] = [
@@ -20,6 +21,7 @@ const FILTER_OPTIONS: FilterRange[] = [
   'This Month',
   'Last Month',
   'Last 3 Months',
+  'All Time',
   'Custom Range',
 ];
 
@@ -90,7 +92,7 @@ export function ChartFilterDropdown({ value, onChange }: ChartFilterDropdownProp
                   className={cn(
                     'w-full text-left px-4 py-2 text-sm transition-colors',
                     value === opt
-                      ? 'bg-indigo-700 text-white font-medium'
+                      ? 'bg-emerald-100 text-emerald-700 font-medium'
                       : 'text-gray-700 hover:bg-gray-50'
                   )}
                 >
@@ -113,7 +115,7 @@ export function ChartFilterDropdown({ value, onChange }: ChartFilterDropdownProp
                     type="date"
                     value={customFrom}
                     onChange={e => setCustomFrom(e.target.value)}
-                    className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                   />
                 </div>
                 <div>
@@ -122,14 +124,14 @@ export function ChartFilterDropdown({ value, onChange }: ChartFilterDropdownProp
                     type="date"
                     value={customTo}
                     onChange={e => setCustomTo(e.target.value)}
-                    className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                   />
                 </div>
               </div>
               <button
                 onClick={handleCustomApply}
                 disabled={!customFrom || !customTo}
-                className="w-full py-2 text-sm font-medium bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-full py-2 text-sm font-medium bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Apply
               </button>

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using TejooWhatsApp.Services;
 using TejooWhatsApp.Models.DTOs;
+using TejooWhatsApp.Repositories;
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
 
@@ -14,17 +15,23 @@ public class ConversationsController : ControllerBase
 {
     private readonly ConversationService _conversationService;
     private readonly WhatsAppOrchestrator _orchestrator;
+    private readonly AiSuggestionRepository _suggestions;
+    private readonly ITeamMemberRepository _teamMembers;
     private readonly ILogger<ConversationsController> _logger;
     private readonly IWebHostEnvironment _env;
 
     public ConversationsController(
         ConversationService conversationService,
         WhatsAppOrchestrator orchestrator,
+        AiSuggestionRepository suggestions,
+        ITeamMemberRepository teamMembers,
         ILogger<ConversationsController> logger,
         IWebHostEnvironment env)
     {
         _conversationService = conversationService;
         _orchestrator = orchestrator;
+        _suggestions = suggestions;
+        _teamMembers = teamMembers;
         _logger = logger;
         _env = env;
     }
@@ -38,7 +45,7 @@ public class ConversationsController : ControllerBase
         [FromQuery] int offset = 0)
     {
         var conversations = await _conversationService.GetAllConversationsAsync(
-            status, ScopeAssignedUserId(assignedUserId), sessionId, limit, offset, CallerUserId());
+            status, await ResolveVisibleAsync(assignedUserId), sessionId, limit, offset, CallerUserId());
         return Ok(conversations);
     }
 
@@ -66,7 +73,7 @@ public class ConversationsController : ControllerBase
         [FromQuery] int? assignedUserId = null,
         [FromQuery] int? sessionId = null)
     {
-        var counts = await _conversationService.GetCountsAsync(ScopeAssignedUserId(assignedUserId), sessionId, CallerUserId());
+        var counts = await _conversationService.GetCountsAsync(await ResolveVisibleAsync(assignedUserId), sessionId, CallerUserId());
         return Ok(counts);
     }
 
@@ -74,26 +81,43 @@ public class ConversationsController : ControllerBase
     [HttpGet("counts-by-session")]
     public async Task<IActionResult> GetCountsBySession([FromQuery] int? assignedUserId = null)
     {
-        var counts = await _conversationService.GetCountsBySessionAsync(ScopeAssignedUserId(assignedUserId));
+        var counts = await _conversationService.GetCountsBySessionAsync(await ResolveVisibleAsync(assignedUserId));
         return Ok(counts);
     }
 
     /// <summary>
-    /// Resolves the effective <c>assignedUserId</c> filter with server-side authorization.
-    /// CRR/Agent users are ALWAYS scoped to their own conversations, ignoring any client-supplied
-    /// value — so the "CRR sees only their own data" rule is enforced on the server, not just the UI.
-    /// (A CRR with a malformed token resolves to -1, which matches no rows, rather than seeing everything.)
+    /// The set of assigned-user ids the caller may see, enforced server-side (null = ALL, Admin only):
+    ///   Admin       → all conversations (null);
+    ///   Manager/HOD → own id + every member of their team(s);
+    ///   CRR/Agent   → own id only (a malformed token resolves to {-1}, matching no rows).
+    /// An optional client-supplied <paramref name="requested"/> narrows within that set (ignored if outside it).
     /// </summary>
-    private int? ScopeAssignedUserId(int? requested)
+    private async Task<List<int>?> ResolveVisibleAsync(int? requested)
     {
         var role = User.FindFirst(ClaimTypes.Role)?.Value ?? "";
-        var isScoped = role.Equals("CRR", StringComparison.OrdinalIgnoreCase)
-                    || role.Equals("Agent", StringComparison.OrdinalIgnoreCase);
-        if (!isScoped) return requested;
+        var uid = CallerUserId() ?? -1;
 
-        var idStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                 ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-        return int.TryParse(idStr, out var id) ? id : -1;
+        List<int>? visible;
+        if (role.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+            visible = null; // all
+        else if (role.Equals("CRR", StringComparison.OrdinalIgnoreCase) || role.Equals("Agent", StringComparison.OrdinalIgnoreCase))
+            visible = new List<int> { uid };
+        else
+        {
+            // Manager / HOD → own id + everyone in their team(s).
+            var ids = new HashSet<int> { uid };
+            foreach (var membership in await _teamMembers.GetMembershipsByUserAsync(uid))
+                foreach (var member in await _teamMembers.GetMembersByTeamAsync(membership.TeamId))
+                    ids.Add(member.UserId);
+            visible = ids.ToList();
+        }
+
+        if (requested.HasValue)
+        {
+            if (visible == null) return new List<int> { requested.Value };            // Admin filtering to one user
+            return visible.Contains(requested.Value) ? new List<int> { requested.Value } : visible;
+        }
+        return visible;
     }
 
     [HttpGet("{id:int}")]
@@ -108,13 +132,68 @@ public class ConversationsController : ControllerBase
         // CRR/Agent may only open conversations assigned to them. Passing null makes this a no-op
         // for Admin/HOD/Manager; for a scoped role it returns the caller's own id. Use 404 (not 403)
         // so we don't reveal that a conversation with this id exists.
-        var scopedTo = ScopeAssignedUserId(null);
-        if (scopedTo.HasValue && (conversation.AssignedUser?.Id ?? 0) != scopedTo.Value)
+        var visible = await ResolveVisibleAsync(null);
+        if (visible != null && !visible.Contains(conversation.AssignedUser?.Id ?? 0))
         {
             return NotFound(new { error = "Conversation not found" });
         }
 
         return Ok(conversation);
+    }
+
+    // GET /api/conversations/{id}/suggestion — the pending AI draft for this chat (copilot / suggest mode).
+    [HttpGet("{id:int}/suggestion")]
+    public async Task<IActionResult> GetSuggestion(int id)
+    {
+        var conversation = await _conversationService.GetConversationDetailAsync(id);
+        if (conversation == null) return Ok((object?)null);
+
+        // Respect CRR scoping: don't leak another agent's draft.
+        var visible = await ResolveVisibleAsync(null);
+        if (visible != null && !visible.Contains(conversation.AssignedUser?.Id ?? 0))
+            return Ok((object?)null);
+
+        var s = await _suggestions.GetPendingAsync(id);
+        if (s == null) return Ok((object?)null);
+        return Ok(new AiSuggestionDTO
+        {
+            Id = s.Id, ConversationId = s.ConversationId, SuggestedText = s.SuggestedText,
+            Intent = s.Intent, Confidence = s.Confidence, CreatedAt = s.CreatedAt
+        });
+    }
+
+    // POST /api/conversations/{id}/suggestion/generate — draft a reply on demand when the chat is
+    // awaiting a response but has no pending suggestion (idempotent; returns the existing draft if any).
+    [HttpPost("{id:int}/suggestion/generate")]
+    public async Task<IActionResult> GenerateSuggestion(int id)
+    {
+        var conversation = await _conversationService.GetConversationDetailAsync(id);
+        if (conversation == null) return Ok((object?)null);
+
+        // Respect CRR scoping: don't draft on another agent's chat.
+        var visible = await ResolveVisibleAsync(null);
+        if (visible != null && !visible.Contains(conversation.AssignedUser?.Id ?? 0))
+            return Ok((object?)null);
+
+        var s = await _orchestrator.GenerateSuggestionOnDemandAsync(id);
+        if (s == null) return Ok((object?)null);
+        return Ok(new AiSuggestionDTO
+        {
+            Id = s.Id, ConversationId = s.ConversationId, SuggestedText = s.SuggestedText,
+            Intent = s.Intent, Confidence = s.Confidence, CreatedAt = s.CreatedAt
+        });
+    }
+
+    // POST /api/conversations/{id}/suggestion/{suggestionId}/resolve — record Sent | Edited | Dismissed.
+    [HttpPost("{id:int}/suggestion/{suggestionId:int}/resolve")]
+    public async Task<IActionResult> ResolveSuggestion(int id, int suggestionId, [FromBody] ResolveSuggestionRequest request)
+    {
+        var allowed = new[] { "Sent", "Edited", "Dismissed" };
+        if (!allowed.Contains(request.Status))
+            return BadRequest(new { error = "Invalid status" });
+
+        var ok = await _suggestions.ResolveAsync(suggestionId, request.Status, CallerUserId());
+        return ok ? Ok(new { success = true }) : NotFound(new { error = "Suggestion not found or already resolved" });
     }
 
     [HttpPut("{id:int}/status")]
@@ -269,7 +348,7 @@ public class ConversationsController : ControllerBase
         if (string.IsNullOrWhiteSpace(q))
             return BadRequest(new { error = "Search query is required" });
 
-        var results = await _conversationService.SearchConversationsAsync(q, limit, ScopeAssignedUserId(assignedUserId));
+        var results = await _conversationService.SearchConversationsAsync(q, limit, await ResolveVisibleAsync(assignedUserId));
         return Ok(results);
     }
 

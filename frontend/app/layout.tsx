@@ -5,6 +5,7 @@ import { ToastProvider } from "@/components/ui/toast";
 export const metadata: Metadata = {
   title: "Tejoo WhatsApp AI Automation",
   description: "Enterprise WhatsApp management platform for Tejoo Fashions",
+  icons: { icon: "/images/tejoo-icon.png" },
 };
 
 export default function RootLayout({
@@ -14,7 +15,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>
+      <body className="bg-beige">
         <ToastProvider>{children}</ToastProvider>
       </body>
     </html>

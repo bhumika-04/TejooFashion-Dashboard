@@ -189,7 +189,7 @@ export function NotificationBell() {
       case 'High':
         return 'border-l-red-500';
       case 'Normal':
-        return 'border-l-indigo-400';
+        return 'border-l-emerald-400';
       default:
         return 'border-l-gray-300';
     }
@@ -238,14 +238,14 @@ export function NotificationBell() {
               <button
                 onClick={toggleSound}
                 title={soundOn ? 'Sound on — click to mute' : 'Sound off — click to enable'}
-                className={`p-1.5 rounded-lg transition-colors ${soundOn ? 'text-indigo-600 hover:bg-indigo-50' : 'text-gray-400 hover:bg-gray-100'}`}
+                className={`p-1.5 rounded-lg transition-colors ${soundOn ? 'text-emerald-600 hover:bg-emerald-50' : 'text-gray-400 hover:bg-gray-100'}`}
               >
                 {soundOn ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
               </button>
               <button
                 onClick={toggleDesktop}
                 title={desktopOn ? 'Desktop alerts on' : 'Enable desktop alerts'}
-                className={`p-1.5 rounded-lg transition-colors ${desktopOn ? 'text-indigo-600 hover:bg-indigo-50' : 'text-gray-400 hover:bg-gray-100'}`}
+                className={`p-1.5 rounded-lg transition-colors ${desktopOn ? 'text-emerald-600 hover:bg-emerald-50' : 'text-gray-400 hover:bg-gray-100'}`}
               >
                 <Monitor className="h-4 w-4" />
               </button>
@@ -267,7 +267,7 @@ export function NotificationBell() {
           <div className="max-h-[400px] overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center py-8">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent"></div>
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent"></div>
               </div>
             ) : notifications.length === 0 ? (
               <div className="text-center py-8 text-gray-500">

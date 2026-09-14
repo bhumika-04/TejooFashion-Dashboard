@@ -15,7 +15,7 @@ public class AiRouterService
         _promptLoader = promptLoader;
     }
 
-    public async Task<AiProcessingResult> ProcessMessageAsync(string userMessage, List<Message> conversationHistory)
+    public async Task<AiProcessingResult> ProcessMessageAsync(string userMessage, List<Message> conversationHistory, string? summaryContext = null)
     {
         try
         {
@@ -24,8 +24,10 @@ public class AiRouterService
                 .Select(m => new ChatMessage
                 {
                     Role = m.Direction == "inbound" ? "user" : "assistant",
-                    Content = m.Content ?? ""
+                    // Fall back to the voice-note transcript so spoken messages aren't lost from context.
+                    Content = string.IsNullOrWhiteSpace(m.Content) ? (m.Transcript ?? "") : m.Content
                 })
+                .Where(cm => !string.IsNullOrWhiteSpace(cm.Content))   // drop empty turns (e.g. bare images) — they're noise to the model
                 .ToList();
 
             // Step 1: Determine intent.
@@ -76,9 +78,15 @@ public class AiRouterService
                     return Escalate($"No specialist prompt for intent: {intent}");
             }
 
-            // Step 3: Generate specialist response
+            // Step 3: Generate specialist response.
+            // Inject the running conversation summary so the AI has long-term memory beyond the last 10
+            // messages (important for long or reopened chats, and after 30-day retention trims history).
+            var specialistSystem = specialistPrompt.SystemPrompt;
+            if (!string.IsNullOrWhiteSpace(summaryContext))
+                specialistSystem += $"\n\n[Context — summary of the earlier conversation so far; use it but do not repeat it verbatim]:\n{summaryContext}";
+
             var specialistRaw = await _openAiClient.GetChatCompletionAsync(
-                specialistPrompt.SystemPrompt, userMessage, contextMessages);
+                specialistSystem, userMessage, contextMessages);
 
             if (string.IsNullOrEmpty(specialistRaw))
                 return Escalate("Specialist returned no response");

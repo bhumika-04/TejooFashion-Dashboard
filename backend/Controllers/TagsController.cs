@@ -20,8 +20,17 @@ public class TagsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateTagRequest req)
     {
-        var id = await _tags.CreateAsync(req.Name, req.Color ?? "#6366f1");
+        var id = await _tags.CreateAsync(req.Name, req.Color ?? "#6366f1", req.Type ?? "conversation", req.Description);
         return Ok(new { id });
+    }
+
+    // PUT /api/tags/{id} — edit the managed taxonomy (name/color/description guides the AI auto-tagger)
+    [HttpPut("{id}")]
+    public async Task<IActionResult> Update(int id, [FromBody] UpdateTagRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { error = "Name is required" });
+        var ok = await _tags.UpdateAsync(id, req.Name.Trim(), req.Color ?? "#6366f1", req.Description);
+        return ok ? Ok(new { success = true }) : NotFound(new { error = "Tag not found" });
     }
 
     // DELETE /api/tags/{id}
@@ -37,21 +46,24 @@ public class TagsController : ControllerBase
     public async Task<IActionResult> GetByConversation(int conversationId)
         => Ok(await _tags.GetByConversationAsync(conversationId));
 
-    // POST /api/tags/conversation/{conversationId}/{tagId}
+    // POST /api/tags/conversation/{conversationId}/{tagId} — a manual edit freezes the auto-tagger.
     [HttpPost("conversation/{conversationId}/{tagId}")]
     public async Task<IActionResult> AddToConversation(int conversationId, int tagId, [FromQuery] int? userId)
     {
         await _tags.AddToConversationAsync(conversationId, tagId, userId);
+        await _tags.LockTagsAsync(conversationId);
         return Ok(new { success = true });
     }
 
-    // DELETE /api/tags/conversation/{conversationId}/{tagId}
+    // DELETE /api/tags/conversation/{conversationId}/{tagId} — a manual edit freezes the auto-tagger.
     [HttpDelete("conversation/{conversationId}/{tagId}")]
     public async Task<IActionResult> RemoveFromConversation(int conversationId, int tagId)
     {
         await _tags.RemoveFromConversationAsync(conversationId, tagId);
+        await _tags.LockTagsAsync(conversationId);
         return Ok(new { success = true });
     }
 }
 
-public record CreateTagRequest(string Name, string? Color);
+public record CreateTagRequest(string Name, string? Color, string? Type, string? Description);
+public record UpdateTagRequest(string Name, string? Color, string? Description);

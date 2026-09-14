@@ -43,6 +43,7 @@ public class ConversationSummaryDTO
     public string? KeyTopics { get; set; }
     public decimal? SentimentScore { get; set; }
     public DateTime LastUpdatedAt { get; set; }
+    public DateTime? SummaryArchivedAt { get; set; }   // if set, messages before this were purged (show banner)
 }
 
 public class CreateConversationRequest

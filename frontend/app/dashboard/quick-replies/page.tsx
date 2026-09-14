@@ -126,17 +126,17 @@ export default function QuickRepliesPage() {
   const allCategories = [...new Set(replies.map(r => r.category ?? 'General'))].sort();
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-gray-50">
+    <div className="flex flex-col h-full min-h-0 bg-beige">
       {/* Category filter */}
       {allCategories.length > 1 && (
         <div className="bg-white border-b border-gray-100 px-6 py-2 flex gap-2 overflow-x-auto">
           <button onClick={() => setFilterCat('')}
-            className={`text-xs px-3 py-1 rounded-full whitespace-nowrap transition-colors ${!filterCat ? 'bg-indigo-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            className={`text-xs px-3 py-1 rounded-full whitespace-nowrap transition-colors ${!filterCat ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             All
           </button>
           {allCategories.map(cat => (
             <button key={cat} onClick={() => setFilterCat(cat === filterCat ? '' : cat)}
-              className={`text-xs px-3 py-1 rounded-full whitespace-nowrap transition-colors ${filterCat === cat ? 'bg-indigo-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              className={`text-xs px-3 py-1 rounded-full whitespace-nowrap transition-colors ${filterCat === cat ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
               {cat}
             </button>
           ))}
@@ -151,7 +151,7 @@ export default function QuickRepliesPage() {
           <div className="text-center py-16 text-gray-400">
             <Zap className="h-10 w-10 mx-auto mb-3 text-gray-200" />
             <p className="text-sm">No quick replies yet</p>
-            <button onClick={openCreate} className="mt-3 text-sm text-indigo-600 hover:text-indigo-800">
+            <button onClick={openCreate} className="mt-3 text-sm text-emerald-600 hover:text-emerald-800">
               Create your first one
             </button>
           </div>
@@ -168,7 +168,7 @@ export default function QuickRepliesPage() {
                     </div>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                       <button onClick={() => openEdit(r)}
-                        className="p-1.5 rounded-lg hover:bg-indigo-50 text-gray-400 hover:text-indigo-600 transition-colors">
+                        className="p-1.5 rounded-lg hover:bg-emerald-50 text-gray-400 hover:text-emerald-600 transition-colors">
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
                       {deleteId === r.id ? (
@@ -212,32 +212,32 @@ export default function QuickRepliesPage() {
                 <label className="text-xs font-medium text-gray-600 block mb-1">Title *</label>
                 <input ref={titleRef} value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                   placeholder="e.g. Order Confirmation"
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-200" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Category</label>
                 <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white">
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white">
                   {DEFAULT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                   <option value="__custom__">Custom…</option>
                 </select>
                 {form.category === '__custom__' && (
                   <input value={form.customCategory} onChange={e => setForm(f => ({ ...f, customCategory: e.target.value }))}
                     placeholder="Enter category name"
-                    className="mt-2 w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+                    className="mt-2 w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-200" />
                 )}
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Message Content *</label>
                 <textarea value={form.content} onChange={e => setForm(f => ({ ...f, content: e.target.value }))}
                   placeholder="Type the reply message…" rows={4}
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-200 resize-none" />
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-200 resize-none" />
                 <p className="text-[11px] text-gray-400 mt-1">{form.content.length} characters</p>
               </div>
             </div>
             <div className="flex gap-2 px-6 py-4 border-t border-gray-100">
               <button onClick={handleSave} disabled={saving}
-                className="flex-1 text-sm py-2 bg-indigo-700 text-white rounded-xl hover:bg-indigo-800 transition-colors disabled:opacity-60">
+                className="flex-1 text-sm py-2 bg-emerald-100 text-emerald-700 rounded-xl hover:bg-emerald-200 transition-colors disabled:opacity-60">
                 {saving ? 'Saving…' : editing ? 'Save Changes' : 'Create'}
               </button>
               <button onClick={closeForm}

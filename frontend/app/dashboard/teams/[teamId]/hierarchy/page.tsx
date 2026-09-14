@@ -106,13 +106,13 @@ export default function TeamHierarchyPage() {
     }
   };
 
-  const avatarGradient = (role: string) => {
+  const avatarColor = (role: string) => {
     switch (role) {
-      case 'Admin':   return 'from-purple-500 to-purple-700';
-      case 'HOD':     return 'from-blue-600 to-blue-800';
-      case 'Manager': return 'from-indigo-400 to-indigo-600';
-      case 'CRR':     return 'from-green-500 to-green-700';
-      default:        return 'from-gray-500 to-gray-700';
+      case 'Admin':   return 'bg-purple-100 text-purple-700';
+      case 'HOD':     return 'bg-blue-100 text-blue-700';
+      case 'Manager': return 'bg-emerald-100 text-emerald-700';
+      case 'CRR':     return 'bg-green-100 text-green-700';
+      default:        return 'bg-gray-100 text-gray-700';
     }
   };
 
@@ -120,7 +120,7 @@ export default function TeamHierarchyPage() {
     switch (role) {
       case 'Admin':   return 'bg-purple-100 text-purple-700 border-purple-200';
       case 'HOD':     return 'bg-blue-100 text-blue-700 border-blue-200';
-      case 'Manager': return 'bg-indigo-100 text-indigo-700 border-indigo-200';
+      case 'Manager': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
       case 'CRR':     return 'bg-green-100 text-green-700 border-green-200';
       default:        return 'bg-gray-100 text-gray-600 border-gray-200';
     }
@@ -131,14 +131,14 @@ export default function TeamHierarchyPage() {
       ?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U';
 
     return (
-      <div className="group relative bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-indigo-300 transition-all duration-200 w-44">
+      <div className="group relative bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-emerald-300 transition-all duration-200 w-44">
         {/* Status dot */}
         <div className={`absolute top-2.5 right-2.5 h-2.5 w-2.5 rounded-full ${node.member.isActive ? 'bg-green-500' : 'bg-gray-300'}`} />
 
         {/* Remove button */}
         <button
           onClick={() => handleRemoveMember(node.member.userId, node.member.fullName)}
-          className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md bg-red-500 hover:bg-red-600 text-white"
+          className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md bg-red-500 hover:bg-red-100 text-red-700"
           title={`Remove ${node.member.fullName}`}
         >
           <Trash2 className="h-3 w-3" />
@@ -146,7 +146,7 @@ export default function TeamHierarchyPage() {
 
         <div className="flex flex-col items-center gap-1.5 p-3 pt-4">
           {/* Avatar */}
-          <div className={`h-11 w-11 rounded-lg bg-gradient-to-br ${avatarGradient(node.member.roleInTeam)} flex items-center justify-center text-white font-bold text-sm shadow`}>
+          <div className={`h-11 w-11 rounded-lg ${avatarColor(node.member.roleInTeam)} flex items-center justify-center font-bold text-sm shadow-sm`}>
             {initials}
           </div>
           {/* Name */}
@@ -192,7 +192,7 @@ export default function TeamHierarchyPage() {
         {hasChildren && (
           <>
             {/* Vertical line down from card */}
-            <div className="w-px h-6 bg-indigo-200" />
+            <div className="w-px h-6 bg-emerald-200" />
 
             {/* Render each row of children */}
             <div className="flex flex-col items-center gap-0">
@@ -211,12 +211,12 @@ export default function TeamHierarchyPage() {
                           key={child.member.userId}
                           className="flex flex-col items-center"
                           style={{
-                            borderTop: '1px solid #c7d2fe',
-                            borderLeft:  (!isOnly && isLast)   ? '1px solid #c7d2fe' : undefined,
-                            borderRight: (!isOnly && isFirst)  ? '1px solid #c7d2fe' : undefined,
+                            borderTop: '1px solid #a7f3d0',
+                            borderLeft:  (!isOnly && isLast)   ? '1px solid #a7f3d0' : undefined,
+                            borderRight: (!isOnly && isFirst)  ? '1px solid #a7f3d0' : undefined,
                             borderTopLeftRadius:  (!isOnly && isLast)  ? '8px' : undefined,
                             borderTopRightRadius: (!isOnly && isFirst) ? '8px' : undefined,
-                            ...(isMiddle ? { borderLeft: '1px solid #c7d2fe', borderRight: '1px solid #c7d2fe' } : {}),
+                            ...(isMiddle ? { borderLeft: '1px solid #a7f3d0', borderRight: '1px solid #a7f3d0' } : {}),
                             paddingTop: '24px',
                             paddingLeft:  '20px',
                             paddingRight: '20px',
@@ -230,7 +230,7 @@ export default function TeamHierarchyPage() {
 
                   {/* Connector between rows: vertical line down then up to next row */}
                   {rowIdx < rows.length - 1 && (
-                    <div className="w-px h-8 bg-indigo-200 mt-0" />
+                    <div className="w-px h-8 bg-emerald-200 mt-0" />
                   )}
                 </div>
               ))}
@@ -247,7 +247,7 @@ export default function TeamHierarchyPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4" />
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto mb-4" />
           <p className="text-gray-500">Loading hierarchy…</p>
         </div>
       </div>
@@ -255,7 +255,7 @@ export default function TeamHierarchyPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
+    <div className="min-h-screen bg-beige p-4 sm:p-6 lg:p-8">
       <div className="max-w-[95%] mx-auto">
 
         {/* Header */}
@@ -266,8 +266,8 @@ export default function TeamHierarchyPage() {
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center">
-                <Users className="h-5 w-5 text-white" />
+              <div className="h-10 w-10 rounded-xl bg-emerald-100 flex items-center justify-center">
+                <Users className="h-5 w-5 text-emerald-600" />
               </div>
               <div>
                 <h1 className="text-lg font-bold text-gray-900">{team?.name} — Hierarchy</h1>
@@ -275,8 +275,8 @@ export default function TeamHierarchyPage() {
               </div>
             </div>
 
-            {/* Zoom controls */}
-            <div className="flex items-center gap-2">
+            {/* Zoom controls — the org chart is desktop-only */}
+            <div className="hidden lg:flex items-center gap-2">
               <div className="flex items-center gap-1 bg-gray-50 rounded-lg p-1 border border-gray-200">
                 <Button variant="ghost" size="sm" onClick={() => setZoom(z => Math.max(50, z - 10))} disabled={zoom <= 50} className="h-8 w-8 p-0">
                   <ZoomOut className="h-4 w-4" />
@@ -295,8 +295,43 @@ export default function TeamHierarchyPage() {
           </div>
         </div>
 
-        {/* Tree canvas */}
-        <Card className="shadow-sm border border-gray-200 bg-white overflow-auto">
+        {/* Mobile / tablet member list — the org chart below is desktop-only (too wide for small screens) */}
+        <div className="lg:hidden bg-white rounded-xl border border-gray-200 shadow-sm divide-y divide-gray-100 overflow-hidden">
+          {members.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">
+              <User className="h-10 w-10 mx-auto mb-2 opacity-30" />
+              <p className="text-sm font-semibold">No members yet</p>
+            </div>
+          ) : (
+            [...members]
+              .sort((a, b) => (ROLE_RANK[a.roleInTeam] ?? 5) - (ROLE_RANK[b.roleInTeam] ?? 5) || a.fullName.localeCompare(b.fullName))
+              .map(m => {
+                const initials = m.fullName?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U';
+                return (
+                  <div key={m.userId} className="flex items-center gap-3 px-4 py-3">
+                    <div className={`h-10 w-10 rounded-lg ${avatarColor(m.roleInTeam)} flex items-center justify-center font-bold text-sm flex-shrink-0`}>{initials}</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{m.fullName}</p>
+                      <p className="text-xs text-gray-400 truncate">{m.email}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                      <Badge className={`text-[10px] border font-semibold px-2 py-0.5 ${badgeColor(m.roleInTeam)}`}>{m.roleInTeam}</Badge>
+                      <span className={`flex items-center gap-1 text-[10px] font-medium ${m.isActive ? 'text-green-600' : 'text-gray-400'}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${m.isActive ? 'bg-green-500' : 'bg-gray-300'}`} />
+                        {m.isActive ? 'Online' : 'Away'}
+                      </span>
+                    </div>
+                    <button onClick={() => handleRemoveMember(m.userId, m.fullName)} className="p-1.5 rounded-md text-red-500 hover:bg-red-50 flex-shrink-0" title="Remove">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })
+          )}
+        </div>
+
+        {/* Tree canvas — desktop org chart */}
+        <Card className="hidden lg:block shadow-sm border border-gray-200 bg-white overflow-auto">
           <CardContent className="p-8 lg:p-12">
             {members.length === 0 ? (
               <div className="text-center py-16 text-gray-400">
@@ -326,7 +361,7 @@ export default function TeamHierarchyPage() {
           {[
             { role: 'Admin',   color: 'bg-purple-100 text-purple-700 border-purple-200' },
             { role: 'HOD',     color: 'bg-blue-100   text-blue-700   border-blue-200'   },
-            { role: 'Manager', color: 'bg-indigo-100 text-indigo-700 border-indigo-200' },
+            { role: 'Manager', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
             { role: 'CRR',     color: 'bg-green-100  text-green-700  border-green-200'  },
           ].map(({ role, color }) => (
             <span key={role} className={`text-xs font-semibold px-3 py-1 rounded-full border ${color}`}>

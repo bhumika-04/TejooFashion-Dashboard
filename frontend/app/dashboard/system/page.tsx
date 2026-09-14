@@ -102,7 +102,7 @@ export default function SystemHealthPage() {
   const backlogWarn = (queue?.oldestUnprocessedSeconds ?? 0) >= 120;
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 bg-white min-h-screen space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 bg-beige min-h-screen space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -162,7 +162,7 @@ export default function SystemHealthPage() {
         <KPICard index={3} title="Dead Letters" value={queue?.deadLetter ?? 0} icon={AlertTriangle} theme="rose"
           subtitleText="Exhausted retries" />
         <KPICard index={4} title="Done Today" value={queue?.doneToday ?? 0} icon={CheckCircle2} theme="green"
-          subtitleText="Processed (IST)" />
+          subtitleText="Processed (IST)" className="col-span-2 lg:col-span-1" />
       </div>
 
       {/* Oldest unprocessed */}
@@ -222,7 +222,7 @@ export default function SystemHealthPage() {
                         <button
                           onClick={() => handleRetry(d.id)}
                           disabled={busyId === d.id}
-                          className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-lg hover:bg-indigo-50 disabled:opacity-50"
+                          className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-800 px-2 py-1 rounded-lg hover:bg-emerald-50 disabled:opacity-50"
                         >
                           <RotateCcw className="h-3 w-3" /> Retry
                         </button>

@@ -23,6 +23,8 @@ export interface SessionFormData {
   apiKey: string;
   assignedUserId: number | null;
   autoReplyEnabled: boolean;
+  aiMode: 'off' | 'suggest' | 'auto';
+  slaMinutes: number;
   connectionVerified: boolean;
 }
 
@@ -54,10 +56,17 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
     apiKey: '',
     assignedUserId: null,
     autoReplyEnabled: false,
+    aiMode: 'suggest',
+    slaMinutes: 30,
     connectionVerified: false,
   });
 
-  const ngrokBase = (process.env.NEXT_PUBLIC_NGROK_URL || '').replace(/\/$/, '');
+  // Webhook base = backend origin. Prefer NEXT_PUBLIC_NGROK_URL (local-dev tunnel override),
+  // else derive from NEXT_PUBLIC_API_URL by stripping the trailing /api. Never a bare relative path.
+  const ngrokBase = (
+    process.env.NEXT_PUBLIC_NGROK_URL
+    || (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '')
+  ).replace(/\/$/, '');
   // When editing an existing session, append ?sid={id} so Interakt routes to the correct session
   const sidParam = session?.id ? `?sid=${session.id}` : '';
   const webhookUrl = formData.provider === 'Interakt'
@@ -77,6 +86,8 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
         apiKey: session.apiKey || '',
         assignedUserId: session.assignedUserId || null,
         autoReplyEnabled: session.autoReplyEnabled ?? true,
+        aiMode: (session.aiMode as 'off' | 'suggest' | 'auto') ?? 'suggest',
+        slaMinutes: session.slaMinutes ?? 30,
         connectionVerified: session.isConnected ?? false,
       });
     } else {
@@ -86,6 +97,8 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
         apiKey: '',
         assignedUserId: null,
         autoReplyEnabled: false,
+        aiMode: 'suggest',
+        slaMinutes: 30,
         connectionVerified: false,
       });
     }
@@ -213,7 +226,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
               </div>
 
               {/* Webhook URL Display */}
-              <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
+              <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
                 <div className="flex items-start justify-between mb-2">
                   <div>
                     <p className="text-sm font-semibold text-gray-900">Webhook URL</p>
@@ -298,7 +311,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                         ? 'bg-green-50 border-2 border-green-200'
                         : connectionStatus === 'error'
                         ? 'bg-red-50 border-2 border-red-200'
-                        : 'bg-indigo-50 border border-indigo-100'
+                        : 'bg-emerald-50 border border-emerald-100'
                     }`}
                   >
                     {connectionStatus === 'success' && (
@@ -336,7 +349,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                     onClick={() => { if (!loading) { setShowUserMenu(v => !v); setUserSearch(''); } }}
                     disabled={loading}
                     className="w-full flex items-center justify-between px-4 py-2.5 border-2 border-gray-200 rounded-lg text-sm
-                      hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+                      hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500
                       disabled:opacity-50 disabled:bg-gray-50 bg-white text-left"
                   >
                     <span className={formData.assignedUserId ? 'text-gray-900' : 'text-gray-400'}>
@@ -364,7 +377,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                           value={userSearch}
                           onChange={e => setUserSearch(e.target.value)}
                           onClick={e => e.stopPropagation()}
-                          className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                          className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-300"
                         />
                       </div>
                       <div className="max-h-48 overflow-y-auto">
@@ -384,7 +397,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                             onClick={() => { setFormData({ ...formData, assignedUserId: user.id }); setShowUserMenu(false); setUserSearch(''); }}
                             className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${
                               formData.assignedUserId === user.id
-                                ? 'bg-indigo-50 text-indigo-700 font-medium'
+                                ? 'bg-emerald-50 text-emerald-700 font-medium'
                                 : 'text-gray-700 hover:bg-gray-50'
                             }`}
                           >
@@ -402,22 +415,49 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                 </div>
               </div>
 
-              {/* Auto Reply Toggle */}
-              <div className="flex items-center justify-between p-4 bg-indigo-50 rounded-xl border border-indigo-100">
-                <div>
-                  <p className="font-semibold text-gray-900">Auto Reply</p>
-                  <p className="text-sm text-gray-600">Enable AI-powered automatic responses</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.autoReplyEnabled}
-                    onChange={(e) => setFormData({ ...formData, autoReplyEnabled: e.target.checked })}
-                    className="sr-only peer"
-                    disabled={loading}
-                  />
-                  <div className="w-14 h-7 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-indigo-700 shadow-inner"></div>
+              {/* First-Response SLA */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  First-Response SLA
                 </label>
+                <div className="flex items-center justify-between gap-3 p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-gray-900">Target time to first reply</p>
+                    <p className="text-sm text-gray-600">Drives the SLA report and each agent&apos;s SLA Met %.</p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <input
+                      type="number" min={1} max={1440}
+                      value={formData.slaMinutes}
+                      onChange={(e) => setFormData({ ...formData, slaMinutes: Number(e.target.value) })}
+                      disabled={loading}
+                      className="w-20 text-center text-base font-bold text-emerald-700 border-2 border-emerald-200 rounded-lg px-2 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-300 bg-white disabled:opacity-50"
+                    />
+                    <span className="text-sm font-medium text-gray-600">min</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* AI Mode */}
+              <div className="p-4 bg-violet-50 rounded-xl border border-violet-100">
+                <p className="font-semibold text-gray-900">AI Mode</p>
+                <p className="text-sm text-gray-600 mb-3">How the AI handles incoming messages on this number.</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    { key: 'off',     label: 'Off',     desc: 'Fully manual' },
+                    { key: 'suggest', label: 'Suggest', desc: 'AI drafts, CRR sends' },
+                    { key: 'auto',    label: 'Auto',    desc: 'AI replies directly' },
+                  ] as const).map(({ key, label, desc }) => (
+                    <button key={key} type="button"
+                      onClick={() => setFormData({ ...formData, aiMode: key })}
+                      className={`text-left px-3 py-2.5 rounded-lg border transition-all ${
+                        formData.aiMode === key ? 'border-violet-400 bg-white ring-2 ring-violet-200' : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}>
+                      <p className={`text-sm font-bold ${formData.aiMode === key ? 'text-violet-700' : 'text-gray-700'}`}>{label}</p>
+                      <p className="text-[11px] text-gray-400 leading-tight mt-0.5">{desc}</p>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </DialogBody>

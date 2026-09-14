@@ -46,11 +46,11 @@ export default function WebhookLogsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-gray-50">
+    <div className="flex flex-col h-full min-h-0 bg-beige">
       {/* Header */}
       <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Webhook className="h-5 w-5 text-indigo-700" />
+          <Webhook className="h-5 w-5 text-emerald-700" />
           <div>
             <h1 className="text-xl font-bold text-gray-900">Webhook Logs</h1>
             <p className="text-xs text-gray-400 mt-0.5">{total} entries</p>
@@ -69,20 +69,20 @@ export default function WebhookLogsPage() {
             value={provider}
             onChange={e => setProvider(e.target.value)}
             placeholder="e.g. meta, twilio…"
-            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-200"
           />
         </div>
         <div>
           <label className="text-xs text-gray-500 block mb-1">Status</label>
           <select value={successFilter} onChange={e => setSuccessFilter(e.target.value as any)}
-            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white">
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white">
             <option value="">All</option>
             <option value="true">Success</option>
             <option value="false">Failed</option>
           </select>
         </div>
         <button onClick={applyFilters}
-          className="text-sm px-4 py-1.5 bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 transition-colors">
+          className="text-sm px-4 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 transition-colors">
           Apply
         </button>
         <button onClick={() => { setProvider(''); setSuccessFilter(''); setPage(1); setTimeout(() => fetchLogs(1), 0); }}

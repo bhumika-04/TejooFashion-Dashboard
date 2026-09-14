@@ -133,7 +133,7 @@ export default function UsersPage() {
   };
 
   return (
-    <div className="bg-white min-h-screen p-4 sm:p-6 lg:p-8">
+    <div className="bg-beige min-h-screen p-4 sm:p-6 lg:p-8">
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6 items-stretch">
@@ -151,6 +151,7 @@ export default function UsersPage() {
           trend={{ value: `${((managerCount / users.length) * 100 || 0).toFixed(0)}% of total`, isPositive: true, icon: Shield }} />
         <KPICard index={4} title="CRR Agents" value={crrCount} icon={UserCog}
           iconColor="text-rose-600" iconBgColor="bg-rose-100"
+          className="col-span-2 xl:col-span-1"
           trend={{ value: `${((crrCount / users.length) * 100 || 0).toFixed(0)}% of total`, isPositive: true, icon: UserCog }} />
       </div>
 
@@ -164,7 +165,7 @@ export default function UsersPage() {
             placeholder="Search by name or email..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder:text-gray-400"
+            className="w-full pl-9 pr-4 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent placeholder:text-gray-400"
           />
         </div>
 
@@ -173,7 +174,7 @@ export default function UsersPage() {
           <button onClick={() => setShowRoleMenu(v => !v)}
             className="flex items-center gap-2 px-3 py-2.5 text-sm font-medium rounded-lg border border-gray-200 bg-white text-gray-700
               hover:border-gray-300 hover:bg-gray-50 active:scale-95 transition-all duration-150 whitespace-nowrap shadow-sm">
-            <Shield className="h-3.5 w-3.5 text-indigo-600" />
+            <Shield className="h-3.5 w-3.5 text-emerald-600" />
             {filterRole === 'all' ? `All (${users.length})` : filterRole === 'hod' ? `HOD (${hodCount})` : filterRole === 'manager' ? `Manager (${managerCount})` : `CRR (${crrCount})`}
             <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform duration-200 ${showRoleMenu ? 'rotate-180' : ''}`} />
           </button>
@@ -187,7 +188,7 @@ export default function UsersPage() {
               ].map(({ key, label, count }) => (
                 <button key={key} onClick={() => { setFilterRole(key); setShowRoleMenu(false); }}
                   className={`w-full flex items-center justify-between px-4 py-2.5 text-sm transition-colors duration-100 ${
-                    filterRole === key ? 'bg-indigo-50 text-indigo-700 font-semibold' : 'text-gray-700 hover:bg-gray-50'
+                    filterRole === key ? 'bg-emerald-50 text-emerald-700 font-semibold' : 'text-gray-700 hover:bg-gray-50'
                   }`}>
                   <span>{label}</span>
                   <span className="text-xs text-gray-400">{count}</span>
@@ -260,7 +261,7 @@ export default function UsersPage() {
                     transition-all duration-150 group cursor-default">
                   {/* User */}
                   <div className="col-span-4 flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-full bg-slate-700 text-white flex items-center justify-center font-semibold text-xs flex-shrink-0
+                    <div className="h-9 w-9 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-semibold text-xs flex-shrink-0
                       group-hover:scale-105 transition-transform duration-200">
                       {(user.fullName || '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || '?'}
                     </div>
@@ -317,7 +318,7 @@ export default function UsersPage() {
                 hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 animate-fade-up ${delays[idx % 4]}`}>
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
-                    <div className="h-11 w-11 rounded-full bg-slate-700 text-white flex items-center justify-center font-semibold text-sm flex-shrink-0">
+                    <div className="h-11 w-11 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-semibold text-sm flex-shrink-0">
                       {(user.fullName || '?').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || '?'}
                     </div>
                     <div>

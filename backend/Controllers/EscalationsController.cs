@@ -78,6 +78,40 @@ public class EscalationsController : ControllerBase
         return Ok(new { success = true, escalationId = escalation.Id, escalatedTo = targetName, level = escalation.EscalationLevel });
     }
 
+    // Transition an escalation's status (e.g. Pending → InProgress) — does NOT create a new record.
+    [HttpPatch("{id}/status")]
+    public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateEscalationRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Status))
+            return BadRequest(new { error = "Status is required" });
+
+        var ok = await _escalationService.UpdateStatusAsync(id, request.Status);
+        if (!ok) return BadRequest(new { error = "Invalid status or escalation not found" });
+
+        var (callerId, callerName) = GetCaller();
+        await _auditRepo.LogAsync("escalation.status", callerId, callerName, "Escalation", id,
+            null, $"{{\"status\":\"{request.Status}\"}}", HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(new { success = true });
+    }
+
+    // Reassign an open escalation to another user.
+    [HttpPatch("{id}/reassign")]
+    public async Task<IActionResult> Reassign(int id, [FromBody] ReassignEscalationRequest request)
+    {
+        if (request.NewUserId <= 0) return BadRequest(new { error = "NewUserId is required" });
+
+        var (ok, targetName, error) = await _escalationService.ReassignAsync(id, request.NewUserId);
+        if (!ok) return BadRequest(new { error = error ?? "Failed to reassign" });
+
+        var (callerId, callerName) = GetCaller();
+        await _auditRepo.LogAsync("escalation.reassign", callerId, callerName, "Escalation", id,
+            null, $"{{\"newUserId\":{request.NewUserId},\"target\":\"{targetName}\"}}",
+            HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(new { success = true, reassignedTo = targetName });
+    }
+
     [HttpPost("{id}/resolve")]
     public async Task<IActionResult> Resolve(int id, [FromBody] UpdateEscalationRequest request)
     {

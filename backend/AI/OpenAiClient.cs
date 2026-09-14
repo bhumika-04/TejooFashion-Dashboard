@@ -9,6 +9,7 @@ public class OpenAiClient
     private readonly string _apiKey;
     private readonly string _model;
     private readonly string _baseUrl;
+    private readonly double _temperature;
 
     public OpenAiClient(IConfiguration configuration, IHttpClientFactory httpClientFactory)
     {
@@ -16,6 +17,8 @@ public class OpenAiClient
         _apiKey = configuration["OpenAI:ApiKey"] ?? throw new Exception("OpenAI API Key not configured");
         _model = configuration["OpenAI:Model"] ?? "gpt-4o-mini";
         _baseUrl = configuration["ExternalApis:OpenAiBaseUrl"] ?? "https://api.openai.com";
+        // Lower temperature = more accurate, consistent business replies (was 0.7). Tunable via config.
+        _temperature = double.TryParse(configuration["OpenAI:Temperature"], out var temp) ? temp : 0.4;
     }
 
     public async Task<string?> GetChatCompletionAsync(string systemPrompt, string userMessage, List<ChatMessage>? conversationHistory = null)
@@ -41,7 +44,7 @@ public class OpenAiClient
         {
             model = _model,
             messages = messages,
-            temperature = 0.7,
+            temperature = _temperature,
             max_tokens = 500
         };
 
@@ -77,6 +80,42 @@ public class OpenAiClient
     {
         return await GetChatCompletionAsync(systemPrompt, userMessage, null);
     }
+
+    /// <summary>Transcribe an audio clip (voice note) to text via OpenAI Whisper. Returns null on failure.</summary>
+    public async Task<string?> TranscribeAudioAsync(byte[] audioBytes, string fileName)
+    {
+        if (audioBytes == null || audioBytes.Length == 0) return null;
+
+        using var form = new MultipartFormDataContent();
+        var audioContent = new ByteArrayContent(audioBytes);
+        audioContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        form.Add(audioContent, "file", string.IsNullOrWhiteSpace(fileName) ? "audio.ogg" : fileName);
+        form.Add(new StringContent("whisper-1"), "model");
+
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/v1/audio/transcriptions");
+        request.Headers.Add("Authorization", $"Bearer {_apiKey}");
+        request.Content = form;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            var response = await _httpClient.SendAsync(request, cts.Token);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+                throw new Exception($"Whisper API error: {response.StatusCode} - {body}");
+            return JsonConvert.DeserializeObject<WhisperResponse>(body)?.Text?.Trim();
+        }
+        catch (OperationCanceledException)
+        {
+            throw new Exception("Whisper API timed out after 30 seconds.");
+        }
+    }
+}
+
+public class WhisperResponse
+{
+    [JsonProperty("text")]
+    public string? Text { get; set; }
 }
 
 public class ChatMessage

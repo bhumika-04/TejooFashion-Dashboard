@@ -144,18 +144,52 @@ public class EscalationService
         {
             Id = row.Id,
             ConversationId = row.ConversationId,
+            EscalatedToUserId = row.EscalatedToUserId,
             EscalatedFromUserName = row.EscalatedFromUserName,
             EscalatedToUserName = row.EscalatedToUserName,
             Reason = row.Reason,
             Priority = row.Priority,
             Status = row.Status,
+            EscalationLevel = row.EscalationLevel,
             EscalatedAt = row.EscalatedAt,
+            LastEscalatedAt = row.LastEscalatedAt,
             ResolvedAt = row.ResolvedAt,
             ResolutionNotes = row.ResolutionNotes,
             CustomerPhone = row.CustomerPhone ?? "",
             CustomerName = row.CustomerName,
             BusinessPhone = row.BusinessPhone ?? ""
         }).ToList();
+    }
+
+    /// <summary>Transition an escalation's status (e.g. Pending → InProgress) without creating a new record.</summary>
+    public async Task<bool> UpdateStatusAsync(int escalationId, string status)
+    {
+        var allowed = new[] { "Pending", "InProgress", "Resolved" };
+        if (!allowed.Contains(status)) return false;
+        return await _escalationRepo.UpdateStatusAsync(escalationId, status);
+    }
+
+    /// <summary>Reassign an open escalation to a different user (keeps the same level, resets the timeout clock).</summary>
+    public async Task<(bool Ok, string? TargetName, string? Error)> ReassignAsync(int escalationId, int newUserId)
+    {
+        var escalation = await _escalationRepo.GetByIdAsync(escalationId);
+        if (escalation == null) return (false, null, "Escalation not found");
+        if (escalation.Status == "Resolved") return (false, null, "Cannot reassign a resolved escalation");
+
+        var target = await _userRepo.GetByIdAsync(newUserId);
+        if (target == null || !target.IsActive) return (false, null, "Target user not found or inactive");
+
+        var ok = await _escalationRepo.ReassignAsync(escalationId, newUserId);
+        if (!ok) return (false, null, "Failed to reassign");
+
+        // Keep the conversation's assignee in sync with the new owner.
+        await _conversationRepo.UpdateAssignedUserAsync(escalation.ConversationId, newUserId);
+
+        await _notificationService.NotifyEscalationAsync(
+            newUserId, escalationId, escalation.ConversationId,
+            "", escalation.Reason ?? "Reassigned escalation", escalation.Priority);
+
+        return (true, target.FullName, null);
     }
 
     public async Task<User?> GetNextEscalationUserAsync(int currentUserId, int? teamId = null)

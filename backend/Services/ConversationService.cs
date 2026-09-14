@@ -70,18 +70,18 @@ public class ConversationService
         };
     }
 
-    public Task<ConversationCounts> GetCountsAsync(int? assignedUserId = null, int? sessionId = null, int? viewerUserId = null)
-        => _conversationRepo.GetCountsAsync(assignedUserId, sessionId, viewerUserId);
+    public Task<ConversationCounts> GetCountsAsync(IReadOnlyList<int>? assignedUserIds = null, int? sessionId = null, int? viewerUserId = null)
+        => _conversationRepo.GetCountsAsync(assignedUserIds, sessionId, viewerUserId);
 
     public async Task<List<ConversationListDTO>> GetAllConversationsAsync(
         string? status = null,
-        int? assignedUserId = null,
+        IReadOnlyList<int>? assignedUserIds = null,
         int? sessionId = null,
         int limit = 100,
         int offset = 0,
         int? viewerUserId = null)
     {
-        var rows = await _conversationRepo.GetAllWithLastMessageAsync(status, assignedUserId, sessionId, limit, offset, viewerUserId);
+        var rows = await _conversationRepo.GetAllWithLastMessageAsync(status, assignedUserIds, sessionId, limit, offset, viewerUserId);
 
         return rows.Select(row => new ConversationListDTO
         {
@@ -106,8 +106,8 @@ public class ConversationService
     public Task MarkViewedAsync(int conversationId, int userId)
         => _conversationRepo.MarkViewedAsync(conversationId, userId);
 
-    public Task<List<SessionConvCount>> GetCountsBySessionAsync(int? assignedUserId = null)
-        => _conversationRepo.GetCountsBySessionAsync(assignedUserId);
+    public Task<List<SessionConvCount>> GetCountsBySessionAsync(IReadOnlyList<int>? assignedUserIds = null)
+        => _conversationRepo.GetCountsBySessionAsync(assignedUserIds);
 
     public async Task<Conversation?> GetOrCreateConversationAsync(int sessionId, string customerPhone, string? customerName = null)
     {
@@ -255,9 +255,9 @@ public class ConversationService
         return true;
     }
 
-    public async Task<List<ConversationListDTO>> SearchConversationsAsync(string query, int limit = 30, int? assignedUserId = null)
+    public async Task<List<ConversationListDTO>> SearchConversationsAsync(string query, int limit = 30, IReadOnlyList<int>? assignedUserIds = null)
     {
-        var rows = await _conversationRepo.SearchAsync(query, limit, assignedUserId);
+        var rows = await _conversationRepo.SearchAsync(query, limit, assignedUserIds);
         return rows.Select(row => new ConversationListDTO
         {
             Id = row.Id,
@@ -281,30 +281,43 @@ public class ConversationService
     {
         var summary = await _summaryRepo.GetByConversationIdAsync(conversationId);
         if (summary == null) return null;
+        var conv = await _conversationRepo.GetByIdAsync(conversationId);
         return new ConversationSummaryDTO
         {
             SummaryText = summary.SummaryText,
             KeyTopics = summary.KeyTopics,
             SentimentScore = summary.SentimentScore,
-            LastUpdatedAt = summary.LastUpdatedAt
+            LastUpdatedAt = summary.LastUpdatedAt,
+            SummaryArchivedAt = conv?.SummaryArchivedAt
         };
     }
 
-    public async Task<ConversationSummaryDTO> GenerateSummaryAsync(int conversationId)
+    public async Task<ConversationSummaryDTO> GenerateSummaryAsync(int conversationId, int messageLimit = 50)
     {
-        var messages = await _messageRepo.GetByConversationIdAsync(conversationId);
-        if (messages.Count == 0)
+        // The retention job passes a large limit so the pre-delete summary covers everything it is
+        // about to permanently delete (not just the oldest 50), preventing silent data loss.
+        var messages = await _messageRepo.GetByConversationIdAsync(conversationId, messageLimit);
+        var prior = await _summaryRepo.GetByConversationIdAsync(conversationId);
+        if (messages.Count == 0 && prior == null)
             throw new Exception("No messages to summarize");
 
         // Build conversation transcript for OpenAI
         var transcript = string.Join("\n", messages.Select(m =>
-            $"{(m.Direction == "inbound" ? "Customer" : "Agent")}: {m.Content}"));
+            $"{(m.Direction == "inbound" ? "Customer" : "Agent")}: {m.Content ?? m.Transcript}"));
 
-        var systemPrompt = "You are a customer support analyst. Summarize this WhatsApp conversation in 2-3 sentences. " +
+        // CUMULATIVE: fold the previous summary in so nothing is lost once old messages are purged
+        // by the 30-day retention job (the summary becomes the permanent record).
+        var userMessage = !string.IsNullOrWhiteSpace(prior?.SummaryText)
+            ? $"PREVIOUS SUMMARY (covers older messages, some of which may already be deleted):\n{prior.SummaryText}\n\nNEWER MESSAGES:\n{transcript}"
+            : transcript;
+
+        var systemPrompt = "You are a customer support analyst. Produce an updated CUMULATIVE summary of this WhatsApp " +
+            "conversation in 2-4 sentences that preserves everything important from the PREVIOUS SUMMARY (if given) AND the " +
+            "newer messages — so nothing is lost even after older messages are deleted. " +
             "Also extract key topics as a comma-separated list and a sentiment score from -1.0 (negative) to 1.0 (positive). " +
             "Reply in this exact format:\nSUMMARY: <summary text>\nTOPICS: <topic1, topic2>\nSENTIMENT: <score>";
 
-        var aiResponse = await _openAiClient.GetSimpleCompletionAsync(systemPrompt, transcript) ?? string.Empty;
+        var aiResponse = await _openAiClient.GetSimpleCompletionAsync(systemPrompt, userMessage) ?? string.Empty;
 
         // Parse response
         var summaryText = ExtractField(aiResponse, "SUMMARY:") ?? "Summary not available";
@@ -326,17 +339,13 @@ public class ConversationService
 
         await _summaryRepo.UpsertAsync(entity);
 
-        // Sentiment-driven prioritization: a clearly negative conversation is raised to High
-        // priority and tagged Complaint so it surfaces for follow-up.
+        // Sentiment-driven prioritization: a clearly negative conversation is raised to High priority
+        // so it surfaces for follow-up. (Tagging is left to AutoTagService against the admin taxonomy,
+        // the single source of auto tags — adding a hardcoded tag here would conflict with its reconcile.)
         if (sentiment.HasValue && sentiment.Value <= AiHeuristics.ComplaintSentimentThreshold)
         {
-            try
-            {
-                await _conversationRepo.UpdatePriorityAsync(conversationId, "High");
-                var tagId = await _tagRepo.GetOrCreateByNameAsync("Complaint", "conversation", AiHeuristics.TagColor("Complaint"));
-                await _tagRepo.AddToConversationAsync(conversationId, tagId, null);
-            }
-            catch { /* best-effort — never fail summary generation over a tag/priority update */ }
+            try { await _conversationRepo.UpdatePriorityAsync(conversationId, "High"); }
+            catch { /* best-effort — never fail summary generation over a priority update */ }
         }
 
         return new ConversationSummaryDTO

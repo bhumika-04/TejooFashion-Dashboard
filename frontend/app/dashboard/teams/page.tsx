@@ -131,12 +131,12 @@ export default function TeamsPage() {
   const filteredTeams = teams;
 
   return (
-    <div className="bg-white min-h-screen p-4 sm:p-6 lg:p-8">
+    <div className="bg-beige min-h-screen p-4 sm:p-6 lg:p-8">
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 items-stretch">
         <KPICard index={0} title="Total Teams" value={teams.length} icon={Users}
-          iconColor="text-indigo-600" iconBgColor="bg-indigo-100"
+          iconColor="text-emerald-600" iconBgColor="bg-emerald-100"
           trend={{ value: `${activeTeams} active`, isPositive: true, icon: UserCheck }} />
         <KPICard index={1} title="Active Teams" value={activeTeams} icon={UserCheck}
           iconColor="text-green-600" iconBgColor="bg-green-100"
@@ -233,7 +233,7 @@ export default function TeamsPage() {
                 <div className="px-4 pb-4 flex gap-2">
                   <button onClick={() => handleManageMembers(team)}
                     className="flex-1 flex items-center justify-center gap-1.5 h-9 text-xs font-semibold
-                      bg-slate-800 text-white rounded-lg hover:bg-slate-700 active:scale-95 transition-all duration-150">
+                      bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 active:scale-95 transition-all duration-150">
                     <UserPlus className="h-3.5 w-3.5" />
                     Members
                   </button>

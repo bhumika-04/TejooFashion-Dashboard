@@ -124,7 +124,7 @@ export function TeamTreeView({ members, teamName }: TeamTreeViewProps) {
 
           {/* Avatar */}
           <div className="flex-shrink-0">
-            <div className="h-9 w-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold text-sm shadow-md">
+            <div className="h-9 w-9 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-semibold text-sm shadow-sm">
               {node.member.fullName
                 ?.split(' ')
                 .map((n: string) => n[0])
@@ -189,7 +189,7 @@ export function TeamTreeView({ members, teamName }: TeamTreeViewProps) {
 
   return (
     <div className="bg-white rounded-lg border border-slate-200">
-      <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-slate-200">
+      <div className="p-4 bg-emerald-50 border-b border-slate-200">
         <h3 className="font-bold text-slate-900 flex items-center gap-2">
           <User className="h-5 w-5 text-blue-600" />
           {teamName} - Team Hierarchy

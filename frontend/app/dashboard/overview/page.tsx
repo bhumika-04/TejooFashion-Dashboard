@@ -2,12 +2,11 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { dashboardApi } from '@/services/api';
-import { MessageSquare, Phone, AlertTriangle, ArrowUp, ArrowDown, Users, Zap, RefreshCw } from 'lucide-react';
+import { MessageSquare, Phone, AlertTriangle, Users, Zap } from 'lucide-react';
 import { AreaChart, Area, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { KPICard } from '@/components/ui/kpi-card';
-import { ChartFilterDropdown, FilterRange } from '@/components/ui/chart-filter-dropdown';
+import { rangeToDates, DASHBOARD_RANGE_EVENT, DashboardRangeDetail } from '@/lib/dateRange';
 
 const REFRESH_INTERVAL = 30_000; // 30 seconds
 
@@ -15,56 +14,49 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<any>(null);
   const [sessionActivity, setSessionActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
-  const [countdown, setCountdown] = useState(REFRESH_INTERVAL / 1000);
-  const [convFilter, setConvFilter] = useState<FilterRange>('Today');
-  const [msgFilter, setMsgFilter] = useState<FilterRange>('Today');
+  // Page-wide date range — chosen from the filter in the shared header, delivered via window event.
+  const rangeRef = useRef<{ from: string; to: string }>(rangeToDates('Today'));
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const countdownRef = useRef<NodeJS.Timeout | null>(null);
 
   const loadStats = async (silent = false) => {
     if (!silent) setLoading(true);
-    else setRefreshing(true);
     try {
+      const { from, to } = rangeRef.current;
       const [statsRes, activityRes] = await Promise.all([
-        dashboardApi.getStats(),
+        dashboardApi.getStats(from, to),
         dashboardApi.getSessionActivity().catch(() => ({ data: [] })),
       ]);
       setStats(statsRes.data);
       setSessionActivity(Array.isArray(activityRes.data) ? activityRes.data : []);
-      setLastRefreshed(new Date());
-      setCountdown(REFRESH_INTERVAL / 1000);
     } catch {
       // silently ignore
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadStats();
     intervalRef.current = setInterval(() => loadStats(true), REFRESH_INTERVAL);
+    // React to the header filter: update the range and reload the whole page's data.
+    const onRange = (e: Event) => {
+      const d = (e as CustomEvent<DashboardRangeDetail>).detail;
+      if (!d) return;
+      rangeRef.current = { from: d.from, to: d.to };
+      loadStats(true);
+    };
+    window.addEventListener(DASHBOARD_RANGE_EVENT, onRange);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      if (countdownRef.current) clearInterval(countdownRef.current);
+      window.removeEventListener(DASHBOARD_RANGE_EVENT, onRange);
     };
-  }, []);
-
-  // Countdown ticker
-  useEffect(() => {
-    countdownRef.current = setInterval(() => {
-      setCountdown(c => (c <= 1 ? REFRESH_INTERVAL / 1000 : c - 1));
-    }, 1000);
-    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
   }, []);
 
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="h-12 w-12 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent"></div>
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent"></div>
           <div className="text-lg font-medium text-gray-600">Loading dashboard...</div>
         </div>
       </div>
@@ -90,33 +82,7 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 bg-white min-h-screen">
-
-      {/* Live refresh indicator */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
-          </span>
-          <span className="text-xs text-gray-400">Live</span>
-        </div>
-        <div className="flex items-center gap-3">
-          {lastRefreshed && (
-            <span className="text-xs text-gray-400">
-              Updated {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </span>
-          )}
-          <button
-            onClick={() => loadStats(true)}
-            disabled={refreshing}
-            className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh {!refreshing && <span className="text-gray-400 ml-0.5">({countdown}s)</span>}
-          </button>
-        </div>
-      </div>
+    <div className="p-4 sm:p-6 lg:p-8 bg-beige min-h-screen">
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6 lg:mb-8 items-stretch">
@@ -131,7 +97,7 @@ export default function DashboardPage() {
           title="Active Sessions"
           value={stats?.activeSessions || 0}
           icon={Phone}
-          theme="indigo"
+          theme="emerald"
           subtitleText="Connected & online"
         />
         <KPICard index={2}
@@ -146,7 +112,7 @@ export default function DashboardPage() {
           value={`${stats?.aiHandlingRate?.toFixed(1) || 0}%`}
           icon={Zap}
           theme="green"
-          subtitleText="Of all conversations today"
+          subtitleText="AI-sent share of replies"
         />
         <KPICard index={4}
           title="Active Users"
@@ -154,6 +120,8 @@ export default function DashboardPage() {
           icon={Users}
           theme="purple"
           subtitleText="Agents online"
+          // Fill the trailing gap: full row on 2-col mobile, spans the last 2 of 3 on md, single on xl(5-col)
+          className="col-span-2 xl:col-span-1"
         />
       </div>
 
@@ -169,7 +137,6 @@ export default function DashboardPage() {
                 </div>
                 Conversation Distribution
               </CardTitle>
-              <ChartFilterDropdown value={convFilter} onChange={(v) => setConvFilter(v)} />
             </div>
           </CardHeader>
           <CardContent className="pt-6">
@@ -233,9 +200,8 @@ export default function DashboardPage() {
                 <div className="h-8 w-8 rounded-full bg-purple-50 flex items-center justify-center">
                   <Zap className="h-4 w-4 text-purple-600" />
                 </div>
-                Today&apos;s Message Activity
+                Message Activity
               </CardTitle>
-              <ChartFilterDropdown value={msgFilter} onChange={(v) => setMsgFilter(v)} />
             </div>
           </CardHeader>
           <CardContent className="pt-6">
@@ -355,7 +321,7 @@ export default function DashboardPage() {
               {[
                 { label: 'Open Conversations', value: stats?.openConversations || 0,                         color: 'text-blue-600' },
                 { label: 'Escalated',           value: stats?.escalatedConversations || 0,                   color: 'text-amber-600' },
-                { label: 'Closed Today',         value: stats?.closedConversations || 0,                     color: 'text-green-600' },
+                { label: 'Closed',               value: stats?.closedConversations || 0,                     color: 'text-green-600' },
                 { label: 'Avg Response',         value: `${stats?.averageResponseTime?.toFixed(1) || 0} min`, color: 'text-gray-800' },
               ].map(({ label, value, color }) => (
                 <div key={label} className="flex justify-between items-center px-3.5 py-2.5 rounded-xl hover:bg-gray-50 transition-colors">
@@ -370,8 +336,8 @@ export default function DashboardPage() {
         <Card className="border-gray-100 animate-fade-up delay-225">
           <CardHeader className="border-b border-gray-100">
             <CardTitle className="flex items-center gap-2 text-gray-800 text-base font-semibold">
-              <div className="h-8 w-8 rounded-full bg-indigo-50 flex items-center justify-center">
-                <Phone className="h-4 w-4 text-indigo-600" />
+              <div className="h-8 w-8 rounded-full bg-emerald-50 flex items-center justify-center">
+                <Phone className="h-4 w-4 text-emerald-600" />
               </div>
               Session Activity
             </CardTitle>
@@ -384,8 +350,8 @@ export default function DashboardPage() {
                 {sessionActivity.slice(0, 5).map((s: any) => (
                   <div key={s.sessionId ?? s.phoneNumber} className="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-gray-50 transition-colors">
                     <div className="relative flex-shrink-0">
-                      <div className="h-8 w-8 rounded-lg bg-indigo-100 flex items-center justify-center">
-                        <Phone className="h-3.5 w-3.5 text-indigo-600" />
+                      <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center">
+                        <Phone className="h-3.5 w-3.5 text-emerald-600" />
                       </div>
                       <span className={`absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white ${s.isConnected ? 'bg-green-500' : 'bg-gray-300'}`} />
                     </div>

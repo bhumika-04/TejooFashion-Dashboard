@@ -34,14 +34,16 @@ public static class Db
             await conn.OpenAsync();
 
         var cmd = (SqlCommand)conn.CreateCommand();
-        cmd.CommandText = sql;
-        AddParameters(cmd, sql, param);
+        // AddParameters may rewrite the SQL (list parameters expand into IN (@p0,@p1,...)),
+        // so set CommandText from its return value rather than the original sql.
+        cmd.CommandText = AddParameters(cmd, sql, param);
         return cmd;
     }
 
-    private static void AddParameters(SqlCommand cmd, string sql, object? param)
+    /// <summary>Returns the (possibly rewritten) SQL after binding parameters.</summary>
+    private static string AddParameters(SqlCommand cmd, string sql, object? param)
     {
-        if (param is null) return;
+        if (param is null) return sql;
 
         foreach (var prop in param.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
@@ -51,6 +53,15 @@ public static class Db
             if (!IsParameterReferenced(sql, prop.Name)) continue;
 
             var value = prop.GetValue(param);
+
+            // List/array parameters (e.g. "... IN @AssignedUserIds"): expand Dapper-style into
+            // (@Name0, @Name1, ...) with one scalar SqlParameter each. SqlClient cannot bind a
+            // List<int> directly, so without this a "IN @list" query throws "No mapping exists".
+            if (value is System.Collections.IEnumerable en && value is not string && value is not byte[])
+            {
+                sql = ExpandListParameter(cmd, sql, prop.Name, en);
+                continue;
+            }
 
             // SqlClient won't accept CLR enums directly — send the underlying numeric value.
             if (value is not null)
@@ -65,6 +76,66 @@ public static class Db
             p.Value = value ?? DBNull.Value;
             cmd.Parameters.Add(p);
         }
+
+        return sql;
+    }
+
+    /// <summary>
+    /// Replaces every whole-token occurrence of <c>@name</c> in the SQL with an expanded
+    /// parameter list <c>(@name0, @name1, ...)</c> and adds one scalar parameter per element.
+    /// An empty collection becomes <c>(SELECT NULL WHERE 1=0)</c> so that <c>IN</c> matches
+    /// nothing and <c>NOT IN</c> matches everything (correct set semantics).
+    /// </summary>
+    private static string ExpandListParameter(SqlCommand cmd, string sql, string name, System.Collections.IEnumerable values)
+    {
+        var token = "@" + name;
+        var replacements = new List<string>();
+        var i = 0;
+        foreach (var item in values)
+        {
+            var pName = $"{token}{i}";
+            var val = item;
+            if (val is not null)
+            {
+                var vt = val.GetType();
+                if (vt.IsEnum) val = Convert.ChangeType(val, Enum.GetUnderlyingType(vt));
+            }
+            var p = cmd.CreateParameter();
+            p.ParameterName = pName;
+            p.Value = val ?? DBNull.Value;
+            cmd.Parameters.Add(p);
+            replacements.Add(pName);
+            i++;
+        }
+
+        var expansion = replacements.Count > 0
+            ? "(" + string.Join(", ", replacements) + ")"
+            : "(SELECT NULL WHERE 1=0)";
+
+        return ReplaceWholeToken(sql, token, expansion);
+    }
+
+    /// <summary>Replaces every occurrence of <paramref name="token"/> that is a complete
+    /// parameter token (not a prefix of a longer @name) with <paramref name="replacement"/>.</summary>
+    private static string ReplaceWholeToken(string sql, string token, string replacement)
+    {
+        var sb = new System.Text.StringBuilder();
+        var idx = 0;
+        while (true)
+        {
+            var found = sql.IndexOf(token, idx, StringComparison.OrdinalIgnoreCase);
+            if (found < 0)
+            {
+                sb.Append(sql, idx, sql.Length - idx);
+                break;
+            }
+            var after = found + token.Length;
+            var isWhole = after >= sql.Length || !(char.IsLetterOrDigit(sql[after]) || sql[after] == '_');
+            sb.Append(sql, idx, found - idx);
+            sb.Append(isWhole ? replacement : token);
+            idx = after;
+        }
+        return sb.ToString();
     }
 
     /// <summary>

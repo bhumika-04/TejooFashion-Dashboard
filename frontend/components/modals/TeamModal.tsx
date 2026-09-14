@@ -90,7 +90,7 @@ export function TeamModal({ open, onOpenChange, onSubmit, team, managers = [] }:
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   placeholder="Brief description of team responsibilities..."
                   rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   disabled={loading}
                 />
               </div>
@@ -103,7 +103,7 @@ export function TeamModal({ open, onOpenChange, onSubmit, team, managers = [] }:
                 <select
                   value={formData.managerId || ''}
                   onChange={(e) => setFormData({ ...formData, managerId: e.target.value ? Number(e.target.value) : null })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   disabled={loading}
                 >
                   <option value="">-- Select Manager --</option>

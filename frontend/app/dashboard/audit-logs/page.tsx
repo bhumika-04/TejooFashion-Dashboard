@@ -49,11 +49,11 @@ export default function AuditLogsPage() {
   const handlePageChange = (p: number) => { setPage(p); fetchLogs(p); };
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-gray-50">
+    <div className="flex flex-col h-full min-h-0 bg-beige">
       {/* Header */}
       <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <ClipboardList className="h-5 w-5 text-indigo-700" />
+          <ClipboardList className="h-5 w-5 text-emerald-700" />
           <div>
             <h1 className="text-xl font-bold text-gray-900">Audit Logs</h1>
             <p className="text-xs text-gray-400 mt-0.5">{total} entries</p>
@@ -69,29 +69,29 @@ export default function AuditLogsPage() {
         <div>
           <label className="text-xs text-gray-500 block mb-1">Action</label>
           <select value={action} onChange={e => setAction(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white">
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white">
             {ACTION_OPTIONS.map(o => <option key={o} value={o}>{o || 'All actions'}</option>)}
           </select>
         </div>
         <div>
           <label className="text-xs text-gray-500 block mb-1">Entity Type</label>
           <select value={entityType} onChange={e => setEntityType(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white">
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white">
             {ENTITY_OPTIONS.map(o => <option key={o} value={o}>{o || 'All entities'}</option>)}
           </select>
         </div>
         <div>
           <label className="text-xs text-gray-500 block mb-1">From</label>
           <input type="date" value={from} onChange={e => setFrom(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-200" />
         </div>
         <div>
           <label className="text-xs text-gray-500 block mb-1">To</label>
           <input type="date" value={to} onChange={e => setTo(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-200" />
         </div>
         <button onClick={applyFilters}
-          className="text-sm px-4 py-1.5 bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 transition-colors">
+          className="text-sm px-4 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200 transition-colors">
           Apply
         </button>
         <button onClick={() => { setAction(''); setEntityType(''); setFrom(''); setTo(''); setPage(1); setTimeout(() => fetchLogs(1), 0); }}

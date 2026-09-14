@@ -46,6 +46,7 @@ public class ConversationSummaryService : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var db          = scope.ServiceProvider.GetRequiredService<DatabaseHelper>();
         var convService = scope.ServiceProvider.GetRequiredService<ConversationService>();
+        var autoTag     = scope.ServiceProvider.GetRequiredService<AutoTagService>();
 
         List<int> ids;
         using (var conn = db.CreateConnection())
@@ -71,6 +72,9 @@ public class ConversationSummaryService : BackgroundService
             ct.ThrowIfCancellationRequested();
             try { await convService.GenerateSummaryAsync(id); done++; }
             catch (Exception ex) { _logger.LogWarning("Summary gen failed for conversation #{Id}: {Error}", id, ex.Message); }
+            // Also refresh AI auto-tags for the same settled conversations (skips CRR-locked ones).
+            try { await autoTag.ClassifyAsync(id); }
+            catch (Exception ex) { _logger.LogWarning("Auto-tag failed for conversation #{Id}: {Error}", id, ex.Message); }
             await Task.Delay(500, ct); // gentle pacing for the OpenAI API
         }
 

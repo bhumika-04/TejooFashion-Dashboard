@@ -44,7 +44,7 @@ public class CustomerRepository
         return await conn.QueryAsync<Customer>(sql, new { Search = search });
     }
 
-    public async Task<(IEnumerable<Customer> Customers, int Total)> GetPagedAsync(string? search, int page, int pageSize, int? tagId = null, int? assignedUserId = null)
+    public async Task<(IEnumerable<Customer> Customers, int Total)> GetPagedAsync(string? search, int page, int pageSize, int? tagId = null, int? convTagId = null, int? assignedUserId = null)
     {
         using var conn = _db.CreateConnection();
         var conditions = new List<string>();
@@ -52,13 +52,17 @@ public class CustomerRepository
             conditions.Add("(c.Phone LIKE '%' + @Search + '%' OR c.Name LIKE '%' + @Search + '%' OR c.Email LIKE '%' + @Search + '%')");
         if (tagId.HasValue)
             conditions.Add("EXISTS (SELECT 1 FROM CustomerTags ct WHERE ct.CustomerId = c.Id AND ct.TagId = @TagId)");
+        // Conversation-tag filter: customers who have at least one conversation carrying this tag.
+        if (convTagId.HasValue)
+            conditions.Add("EXISTS (SELECT 1 FROM Conversations cv JOIN ConversationTags cvt ON cvt.ConversationId = cv.Id WHERE cv.CustomerPhone = c.Phone AND cvt.TagId = @ConvTagId)");
         // CRR/agent scoping: only customers who have a conversation assigned to this user.
         if (assignedUserId.HasValue)
             conditions.Add("EXISTS (SELECT 1 FROM Conversations cv WHERE cv.CustomerPhone = c.Phone AND cv.AssignedUserId = @AssignedUserId)");
         var where = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+        var p = new { Search = search, TagId = tagId, ConvTagId = convTagId, AssignedUserId = assignedUserId };
 
         var total = await conn.ExecuteScalarAsync<int>(
-            $"SELECT COUNT(*) FROM Customers c {where}", new { Search = search, TagId = tagId, AssignedUserId = assignedUserId });
+            $"SELECT COUNT(*) FROM Customers c {where}", p);
 
         var customers = await conn.QueryAsync<Customer>($"""
             SELECT c.*,
@@ -79,7 +83,7 @@ public class CustomerRepository
             FROM Customers c {where}
             ORDER BY c.LastSeenAt DESC
             OFFSET {(page - 1) * pageSize} ROWS FETCH NEXT {pageSize} ROWS ONLY
-            """, new { Search = search, TagId = tagId, AssignedUserId = assignedUserId });
+            """, p);
 
         return (customers, total);
     }

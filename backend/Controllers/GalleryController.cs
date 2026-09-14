@@ -1,7 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
-using System.Security.Claims;
-using System.IdentityModel.Tokens.Jwt;
 using TejooWhatsApp.Repositories;
 
 namespace TejooWhatsApp.Controllers;
@@ -17,31 +15,31 @@ public class GalleryController : ControllerBase
 
     /// <summary>
     /// Paged media gallery, newest first. Defaults to images.
-    /// CRR/Agent users are scoped to their own conversations' media.
+    /// Shared media library — visible to ALL roles (it's the source for product catalogs).
     /// </summary>
     [HttpGet]
     public async Task<IActionResult> Get(
         [FromQuery] string type = "image",
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 30)
+        [FromQuery] int pageSize = 30,
+        [FromQuery] string? direction = null,
+        [FromQuery] int? sessionId = null,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null)
     {
         if (page < 1) page = 1;
         pageSize = Math.Clamp(pageSize, 1, 200);
+        // Normalise direction to the stored casing; ignore anything else.
+        var dir = direction?.ToLowerInvariant() switch
+        {
+            "inbound"  => "inbound",
+            "outbound" => "outbound",
+            _          => null
+        };
 
-        var (items, total) = await _messages.GetMediaAsync(type, page, pageSize, ScopeAssignedUserId());
+        // null = no user filter: the gallery is a shared library every role can browse.
+        var (items, total) = await _messages.GetMediaAsync(
+            type, page, pageSize, null, dir, sessionId, from, to);
         return Ok(new { items, total, page, pageSize });
-    }
-
-    // CRR/Agent see only their own conversations' media; others (Admin/HOD/Manager) see all.
-    private int? ScopeAssignedUserId()
-    {
-        var role = User.FindFirst(ClaimTypes.Role)?.Value ?? "";
-        var scoped = role.Equals("CRR", StringComparison.OrdinalIgnoreCase)
-                  || role.Equals("Agent", StringComparison.OrdinalIgnoreCase);
-        if (!scoped) return null;
-
-        var idStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                 ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-        return int.TryParse(idStr, out var id) ? id : -1;
     }
 }

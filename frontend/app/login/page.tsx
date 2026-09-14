@@ -1,22 +1,17 @@
 'use client';
 
-import { Suspense, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { authApi } from '@/services/api';
 import { Eye, EyeOff, MessageSquare, Zap, ShieldCheck, Users, TrendingUp, Clock } from 'lucide-react';
 
 export default function LoginPage() {
-  return (
-    <Suspense>
-      <LoginForm />
-    </Suspense>
-  );
+  return <LoginForm />;
 }
 
 function LoginForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -24,8 +19,7 @@ function LoginForm() {
   const [error, setError] = useState('');
 
   const redirectTo = () => {
-    const redirect = searchParams.get('redirect');
-    router.push(redirect && redirect.startsWith('/dashboard') ? redirect : '/dashboard/overview');
+    router.push('/dashboard/overview');
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -49,43 +43,28 @@ function LoginForm() {
     }
   };
 
-  const handleDevBypass = async () => {
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/users/dev-login`, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        localStorage.setItem('authToken', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
-        document.cookie = `authToken=${data.token}; path=/; max-age=${8 * 60 * 60}; SameSite=Lax`;
-        redirectTo();
-      }
-    } catch {
-      setError('Dev bypass failed — make sure the backend is running.');
-    }
-  };
-
   return (
-    <div className="min-h-screen flex bg-white">
+    <div className="min-h-screen flex bg-beige">
 
       {/* ── Left panel — branding ── */}
       <div className="hidden lg:flex lg:w-[52%] relative flex-col justify-between p-12 overflow-hidden flex-shrink-0"
-           style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)' }}>
+           style={{ background: 'linear-gradient(135deg, #06281e 0%, #0b3d2e 55%, #04241b 100%)' }}>
 
         {/* Layered background decorations */}
         <div className="absolute inset-0 pointer-events-none">
-          {/* Radial glow — top-left */}
-          <div className="absolute -top-40 -left-40 w-[36rem] h-[36rem] rounded-full opacity-30"
-               style={{ background: 'radial-gradient(circle, #6366f1 0%, transparent 70%)' }} />
-          {/* Radial glow — bottom-right */}
-          <div className="absolute -bottom-32 -right-32 w-[28rem] h-[28rem] rounded-full opacity-20"
-               style={{ background: 'radial-gradient(circle, #818cf8 0%, transparent 70%)' }} />
-          {/* Center ring */}
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[40rem] h-[40rem] rounded-full border border-indigo-800/30" />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[30rem] h-[30rem] rounded-full border border-indigo-800/20" />
+          {/* Radial glow — top-left (gold) */}
+          <div className="absolute -top-40 -left-40 w-[36rem] h-[36rem] rounded-full opacity-25"
+               style={{ background: 'radial-gradient(circle, #f5a623 0%, transparent 70%)' }} />
+          {/* Radial glow — bottom-right (green) */}
+          <div className="absolute -bottom-32 -right-32 w-[28rem] h-[28rem] rounded-full opacity-25"
+               style={{ background: 'radial-gradient(circle, #10b981 0%, transparent 70%)' }} />
+          {/* Center rings */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[40rem] h-[40rem] rounded-full border border-emerald-700/30" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[30rem] h-[30rem] rounded-full border border-amber-500/15" />
           {/* Dot grid */}
           <div className="absolute inset-0"
                style={{
-                 backgroundImage: 'radial-gradient(circle, rgba(99,102,241,0.15) 1px, transparent 1px)',
+                 backgroundImage: 'radial-gradient(circle, rgba(245,166,35,0.12) 1px, transparent 1px)',
                  backgroundSize: '28px 28px',
                }} />
         </div>
@@ -94,26 +73,25 @@ function LoginForm() {
         <div className="relative z-10">
           <div className="mb-10">
             <Image
-              src="/images/tejoo-logo-light.png"
-              alt="Tejoo Fashions"
-              width={140}
-              height={70}
-              style={{ height: 'auto' }}
-              className="brightness-0 invert opacity-90"
+              src="/images/tejoo-logo-white.png"
+              alt="Tejoo Fashion"
+              width={170}
+              height={54}
+              className="w-[170px] h-auto"
             />
           </div>
           <div className="max-w-sm">
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-widest text-indigo-400 uppercase mb-5 px-3 py-1.5 rounded-full border border-indigo-500/30 bg-indigo-500/10">
-              <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-pulse" />
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-widest text-amber-300 uppercase mb-5 px-3 py-1.5 rounded-full border border-amber-400/30 bg-amber-400/10">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
               AI-Powered Platform
             </span>
             <h1 className="text-4xl font-bold text-white leading-tight mb-4">
               WhatsApp<br />
-              <span style={{ background: 'linear-gradient(90deg, #818cf8, #c7d2fe)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+              <span style={{ background: 'linear-gradient(90deg, #fbbf24, #fde68a)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                 AI Automation
               </span>
             </h1>
-            <p className="text-slate-400 text-sm leading-relaxed">
+            <p className="text-slate-300 text-sm leading-relaxed">
               Manage conversations, automate replies, and scale your customer support with intelligent AI — all from one dashboard.
             </p>
           </div>
@@ -130,8 +108,8 @@ function LoginForm() {
               <div key={label}
                    className="rounded-2xl p-4 border border-white/[0.08]"
                    style={{ background: 'rgba(255,255,255,0.04)', backdropFilter: 'blur(8px)' }}>
-                <div className="h-7 w-7 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center mb-2">
-                  <Icon className="h-3.5 w-3.5 text-indigo-400" />
+                <div className="h-7 w-7 rounded-lg bg-amber-400/20 border border-amber-400/30 flex items-center justify-center mb-2">
+                  <Icon className="h-3.5 w-3.5 text-amber-300" />
                 </div>
                 <div className="text-xl font-bold text-white">{value}</div>
                 <div className="text-xs text-slate-500 mt-0.5">{label}</div>
@@ -147,8 +125,8 @@ function LoginForm() {
               { icon: Users,         label: 'Team escalation workflows'     },
             ].map(({ icon: Icon, label }) => (
               <div key={label} className="flex items-center gap-3">
-                <div className="h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0 border border-indigo-500/20 bg-indigo-500/10">
-                  <Icon className="h-3.5 w-3.5 text-indigo-400" />
+                <div className="h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0 border border-amber-400/20 bg-amber-400/10">
+                  <Icon className="h-3.5 w-3.5 text-amber-300" />
                 </div>
                 <span className="text-slate-400 text-sm">{label}</span>
               </div>
@@ -171,12 +149,12 @@ function LoginForm() {
       </div>
 
       {/* ── Right panel — form ── */}
-      <div className="flex-1 flex items-center justify-center px-6 py-12 bg-gray-50">
+      <div className="flex-1 flex items-center justify-center px-6 py-12 bg-beige">
         <div className="w-full max-w-[380px]">
 
           {/* Mobile logo */}
           <div className="flex justify-center mb-8 lg:hidden">
-            <Image src="/images/tejoo-logo-dark.png" alt="Tejoo Fashions" width={130} height={65} style={{ height: 'auto' }} />
+            <Image src="/images/tejoo-logo.png" alt="Tejoo Fashion" width={150} height={56} style={{ height: 'auto' }} />
           </div>
 
           {/* Card wrapper */}
@@ -202,7 +180,7 @@ function LoginForm() {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   required
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent focus:bg-white transition-all duration-200"
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent focus:bg-white transition-all duration-200"
                 />
               </div>
 
@@ -222,7 +200,7 @@ function LoginForm() {
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     required
-                    className="w-full px-4 py-3 pr-11 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent focus:bg-white transition-all duration-200"
+                    className="w-full px-4 py-3 pr-11 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent focus:bg-white transition-all duration-200"
                   />
                   <button
                     type="button"
@@ -248,12 +226,12 @@ function LoginForm() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full text-white font-semibold py-3 px-4 rounded-xl transition-all duration-200 text-sm flex items-center justify-center gap-2 mt-1 shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-y-0"
-                style={{ background: loading ? undefined : 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)', backgroundColor: loading ? '#6366f1' : undefined }}
+                className="w-full text-emerald-950 font-bold py-3 px-4 rounded-xl transition-all duration-200 text-sm flex items-center justify-center gap-2 mt-1 shadow-lg shadow-amber-500/30 hover:shadow-amber-500/50 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-y-0"
+                style={{ background: loading ? undefined : 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)', backgroundColor: loading ? '#f59e0b' : undefined }}
               >
                 {loading ? (
                   <>
-                    <span className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span className="h-4 w-4 border-2 border-emerald-950/30 border-t-emerald-950 rounded-full animate-spin" />
                     Signing in…
                   </>
                 ) : (
@@ -261,23 +239,6 @@ function LoginForm() {
                 )}
               </button>
             </form>
-
-            {/* Divider */}
-            <div className="flex items-center gap-3 my-6">
-              <div className="flex-1 h-px bg-gray-100" />
-              <span className="text-[11px] text-gray-400 font-medium">or</span>
-              <div className="flex-1 h-px bg-gray-100" />
-            </div>
-
-            {/* Social / SSO placeholder — dev bypass */}
-            <button
-              type="button"
-              onClick={handleDevBypass}
-              className="w-full text-sm text-gray-500 hover:text-gray-700 bg-gray-50 hover:bg-gray-100 border border-gray-200 hover:border-gray-300 py-2.5 rounded-xl transition-all duration-200 font-medium"
-            >
-              Dev Access — Skip Login
-            </button>
-            <p className="text-center text-[11px] text-gray-300 mt-2">Remove before production</p>
           </div>
 
           {/* Footer note */}

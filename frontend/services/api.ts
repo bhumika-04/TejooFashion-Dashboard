@@ -39,14 +39,12 @@ export default apiClient;
 export const authApi = {
   login: (email: string, password: string) =>
     apiClient.post('/users/login', { email, password }),
-
-  getCurrentUser: () =>
-    apiClient.get('/users/me'),
 };
 
 export const dashboardApi = {
-  getStats: () =>
-    apiClient.get('/reports/dashboard'),
+  // from/to are IST calendar dates (yyyy-MM-dd); omitted → today.
+  getStats: (from?: string, to?: string) =>
+    apiClient.get('/reports/dashboard', { params: { from, to } }),
 
   getConversationTrends: (days: number = 7) =>
     apiClient.get(`/reports/conversation-trends?days=${days}`),
@@ -54,11 +52,23 @@ export const dashboardApi = {
   getSessionActivity: () =>
     apiClient.get('/reports/session-activity'),
 
-  getAgentStats: () =>
-    apiClient.get('/reports/agent-stats'),
+  getAgentStats: (days?: number) =>
+    apiClient.get('/reports/agent-stats', { params: days ? { days } : {} }),
 
   getPerformance: (period: 'today' | 'week' | 'month' = 'today') =>
     apiClient.get(`/reports/performance?period=${period}`),
+
+  getAiSuggestionStats: (period: 'today' | 'week' | 'month' = 'week') =>
+    apiClient.get(`/reports/ai-suggestions?period=${period}`),
+
+  getAiSuggestionsByAgent: (period: 'today' | 'week' | 'month' = 'week') =>
+    apiClient.get(`/reports/ai-suggestions/by-agent?period=${period}`),
+
+  getSentiment: (days: number = 7) =>
+    apiClient.get(`/reports/sentiment?days=${days}`),
+
+  getResponseTimeTrend: (days: number = 7) =>
+    apiClient.get(`/reports/response-time-trend?days=${days}`),
 
   getPerformanceSummary: (period: 'today' | 'week' | 'month' = 'today') =>
     apiClient.get(`/reports/performance-summary?period=${period}`),
@@ -89,17 +99,9 @@ export const settingsApi = {
   updateEscalationPolicy: (mode: string, confidenceThreshold: number) =>
     apiClient.put('/settings/escalation-policy', { mode, confidenceThreshold }),
 
-  getBusinessHours: () =>
-    apiClient.get('/settings/business-hours'),
-
-  updateBusinessHours: (data: { enabled: boolean; start: string; end: string; timezone: string }) =>
-    apiClient.put('/settings/business-hours', data),
-
-  getAutoClose: () =>
-    apiClient.get('/settings/auto-close'),
-
-  updateAutoClose: (enabled: boolean, inactiveHours: number) =>
-    apiClient.put('/settings/auto-close', { enabled, inactiveHours }),
+  getRetention: () => apiClient.get('/settings/retention'),
+  updateRetention: (enabled: boolean, days: number) =>
+    apiClient.put('/settings/retention', { enabled, days }),
 };
 
 export const conversationsApi = {
@@ -125,6 +127,13 @@ export const conversationsApi = {
 
   sendMessage: (id: number, content: string, messageType: string = 'text', mediaUrl?: string) =>
     apiClient.post(`/conversations/${id}/send-message`, { content, messageType, mediaUrl }),
+
+  // AI copilot: pending draft for a chat + recording the CRR's action (Sent | Edited | Dismissed).
+  getSuggestion: (id: number) => apiClient.get(`/conversations/${id}/suggestion`),
+  // Draft a reply on demand when a chat is awaiting a response but has no stored suggestion.
+  generateSuggestion: (id: number) => apiClient.post(`/conversations/${id}/suggestion/generate`),
+  resolveSuggestion: (id: number, suggestionId: number, status: 'Sent' | 'Edited' | 'Dismissed') =>
+    apiClient.post(`/conversations/${id}/suggestion/${suggestionId}/resolve`, { status }),
 
   uploadMedia: (id: number, file: File) => {
     const form = new FormData();
@@ -190,6 +199,14 @@ export const escalationsApi = {
 
   resolve: (id: number, resolutionNotes?: string) =>
     apiClient.post(`/escalations/${id}/resolve`, { resolutionNotes }),
+
+  // Transition status (e.g. Pending → InProgress) without creating a new escalation.
+  updateStatus: (id: number, status: string) =>
+    apiClient.patch(`/escalations/${id}/status`, { status }),
+
+  // Reassign an open escalation to another user.
+  reassign: (id: number, newUserId: number) =>
+    apiClient.patch(`/escalations/${id}/reassign`, { newUserId }),
 };
 
 export const escalationRulesApi = {
@@ -300,9 +317,6 @@ export const teamsApi = {
 
   removeMember: (teamId: number, userId: number) =>
     apiClient.delete(`/teams/${teamId}/members/${userId}`),
-
-  getHierarchy: (teamId: number) =>
-    apiClient.get(`/teams/${teamId}/tree`),
 };
 
 export const aiPromptsApi = {
@@ -353,10 +367,11 @@ export const rolePermissionsApi = {
 };
 
 export const customersApi = {
-  getAll: (search?: string, page = 1, pageSize = 50, tagId?: number) => {
+  getAll: (search?: string, page = 1, pageSize = 50, tagId?: number, convTagId?: number) => {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (search) params.append('search', search);
     if (tagId) params.append('tagId', String(tagId));
+    if (convTagId) params.append('convTagId', String(convTagId));
     return apiClient.get(`/customers?${params}`);
   },
   getById: (id: number) => apiClient.get(`/customers/${id}`),
@@ -374,7 +389,10 @@ export const customersApi = {
 
 export const tagsApi = {
   getAll: (type?: 'conversation' | 'customer') => apiClient.get(`/tags${type ? `?type=${type}` : ''}`),
-  create: (name: string, color?: string) => apiClient.post('/tags', { name, color }),
+  create: (name: string, color?: string, type: 'conversation' | 'customer' = 'conversation', description?: string) =>
+    apiClient.post('/tags', { name, color, type, description }),
+  update: (id: number, data: { name: string; color?: string; description?: string }) =>
+    apiClient.put(`/tags/${id}`, data),
   delete: (id: number) => apiClient.delete(`/tags/${id}`),
   getByConversation: (conversationId: number) => apiClient.get(`/tags/conversation/${conversationId}`),
   addToConversation: (conversationId: number, tagId: number, userId?: number) =>
@@ -453,22 +471,36 @@ export const notificationsApi = {
   // Mark all as read
   markAllAsRead: (userId: number) =>
     apiClient.post(`/notifications/user/${userId}/read-all`),
+};
 
-  // Mark conversation as viewed (for unread tracking)
-  markConversationViewed: (conversationId: number, userId: number) =>
-    apiClient.post(`/notifications/conversation/${conversationId}/view?userId=${userId}`),
-
-  // Get unread message count for a conversation
-  getConversationUnreadCount: (conversationId: number, userId: number) =>
-    apiClient.get(`/notifications/conversation/${conversationId}/unread?userId=${userId}`),
-
-  // Get all unread conversations for a user
-  getUnreadConversations: (userId: number) =>
-    apiClient.get(`/notifications/user/${userId}/unread-conversations`),
+// ── Catalogs (product image groups) ──
+export const catalogsApi = {
+  getAll: () => apiClient.get('/catalogs'),
+  getById: (id: number) => apiClient.get(`/catalogs/${id}`),
+  create: (name: string, info?: string) => apiClient.post('/catalogs', { name, info }),
+  update: (id: number, name: string, info?: string) => apiClient.put(`/catalogs/${id}`, { name, info }),
+  delete: (id: number) => apiClient.delete(`/catalogs/${id}`),
+  addItems: (id: number, items: { mediaUrl: string; sourceMessageId?: number }[]) =>
+    apiClient.post(`/catalogs/${id}/items`, { items }),
+  removeItem: (id: number, itemId: number) => apiClient.delete(`/catalogs/${id}/items/${itemId}`),
+  // Queue a catalog's images (selected subset, ≤30) to be sent to a conversation one-by-one.
+  send: (id: number, conversationId: number, mediaUrls: string[]) =>
+    apiClient.post(`/catalogs/${id}/send`, { conversationId, mediaUrls }),
 };
 
 // ── Media gallery ──
 export const galleryApi = {
-  get: (type: string = 'image', page: number = 1, pageSize: number = 30) =>
-    apiClient.get(`/gallery?type=${type}&page=${page}&pageSize=${pageSize}`),
+  get: (
+    type: string = 'image',
+    page: number = 1,
+    pageSize: number = 30,
+    filters: { direction?: 'inbound' | 'outbound'; sessionId?: number; from?: string; to?: string } = {},
+  ) => {
+    const p = new URLSearchParams({ type, page: String(page), pageSize: String(pageSize) });
+    if (filters.direction) p.append('direction', filters.direction);
+    if (filters.sessionId) p.append('sessionId', String(filters.sessionId));
+    if (filters.from) p.append('from', filters.from);
+    if (filters.to) p.append('to', filters.to);
+    return apiClient.get(`/gallery?${p}`);
+  },
 };

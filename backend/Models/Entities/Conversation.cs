@@ -19,6 +19,8 @@ public class Conversation
     public DateTime? LastMessageAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ClosedAt { get; set; }
+    public DateTime? SummaryArchivedAt { get; set; }   // set by retention: messages before this were purged
+    public bool TagsLocked { get; set; }               // a CRR edited the tags → auto-tagger frozen
 
     // Navigation properties
     public WhatsAppSession Session { get; set; } = null!;
