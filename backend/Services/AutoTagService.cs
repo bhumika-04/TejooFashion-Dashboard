@@ -39,10 +39,16 @@ public class AutoTagService
         var tagList = string.Join("\n", taxonomy.Select(t => $"- {t.Name}: {t.Description ?? "(no description)"}"));
 
         var systemPrompt =
-            "You are a support-conversation classifier for a fashion wholesale business. " +
-            "From the TAG LIST below, choose ONLY the tags that clearly apply to the conversation. " +
-            "Return a comma-separated list of exact tag names from the list, or the single word NONE if none apply. " +
-            "Do not invent tags or add anything outside the list.\n\nTAG LIST:\n" + tagList;
+            "You are a precise classifier for a B2B fashion wholesale business (Tejoo Fashions — sells sets, high minimum order). " +
+            "Read the conversation and pick ONLY tags from the TAG LIST that have clear, specific evidence.\n" +
+            "RULES:\n" +
+            "- Apply the FEWEST tags that fit. Most conversations need just ONE tag; two only when genuinely distinct topics appear.\n" +
+            "- Never apply a tag on weak, generic or ambiguous signals — when unsure, leave it out.\n" +
+            "- A routine product / price / stock / catalogue enquiry is a normal Query or Order — it is NOT a Complaint.\n" +
+            "- Use 'Complaint' ONLY for real dissatisfaction: defective/wrong/damaged goods, delays the customer is upset about, or an angry customer. Ordinary questions are never complaints.\n" +
+            "- Use each tag according to its description when one is given; if a tag says '(no description)', judge strictly by its name.\n" +
+            "- If no tag clearly applies, output exactly: NONE\n" +
+            "Output ONLY a comma-separated list of exact tag names from the list (nothing else), or NONE.\n\nTAG LIST:\n" + tagList;
 
         string? reply;
         try { reply = await _openAi.GetSimpleCompletionAsync(systemPrompt, transcript); }

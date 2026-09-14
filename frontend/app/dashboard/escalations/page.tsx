@@ -1425,6 +1425,11 @@ export default function EscalationsPage() {
         </CardContent>
       </Card>
 
+      {/* Conversation Tags — taxonomy the AI auto-classifies chats into; view, add, edit or delete with descriptions */}
+      <div className="mt-6">
+        <AutoTagManager />
+      </div>
+
       {/* Resolve Dialog */}
       <Dialog open={resolveDialogOpen} onOpenChange={setResolveDialogOpen}>
         <DialogContent>
