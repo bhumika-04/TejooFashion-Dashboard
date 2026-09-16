@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { dashboardApi } from '@/services/api';
-import { MessageSquare, Phone, AlertTriangle, Users, Zap } from 'lucide-react';
+import { dashboardApi, conversationsApi } from '@/services/api';
+import { MessageSquare, Phone, AlertTriangle, Users, Zap, Timer, ChevronRight } from 'lucide-react';
 import { AreaChart, Area, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { KPICard } from '@/components/ui/kpi-card';
 import { rangeToDates, DASHBOARD_RANGE_EVENT, DashboardRangeDetail } from '@/lib/dateRange';
@@ -11,8 +12,13 @@ import { rangeToDates, DASHBOARD_RANGE_EVENT, DashboardRangeDetail } from '@/lib
 const REFRESH_INTERVAL = 30_000; // 30 seconds
 
 export default function DashboardPage() {
+  const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } })();
+  const isCRR = (currentUser.role ?? currentUser.Role ?? '').toUpperCase() === 'CRR';
+  const currentUserId: number | undefined = currentUser.id ?? currentUser.Id;
+
   const [stats, setStats] = useState<any>(null);
   const [sessionActivity, setSessionActivity] = useState<any[]>([]);
+  const [slaBreaches, setSlaBreaches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   // Page-wide date range — chosen from the filter in the shared header, delivered via window event.
   const rangeRef = useRef<{ from: string; to: string }>(rangeToDates('Today'));
@@ -28,6 +34,11 @@ export default function DashboardPage() {
       ]);
       setStats(statsRes.data);
       setSessionActivity(Array.isArray(activityRes.data) ? activityRes.data : []);
+      // CRR: their own open chats overdue for a reply past the session SLA.
+      if (isCRR) {
+        const r = await conversationsApi.getSlaBreaches(currentUserId).catch(() => ({ data: [] }));
+        setSlaBreaches(Array.isArray(r.data) ? r.data : []);
+      }
     } catch {
       // silently ignore
     } finally {
@@ -124,6 +135,47 @@ export default function DashboardPage() {
           className="col-span-2 xl:col-span-1"
         />
       </div>
+
+      {/* CRR: my open chats overdue for a reply past the session SLA */}
+      {isCRR && slaBreaches.length > 0 && (
+        <Card className="border-rose-100 mb-6 lg:mb-8">
+          <CardHeader className="border-b border-rose-100">
+            <CardTitle className="flex items-center gap-2 text-gray-800 text-base font-semibold">
+              <div className="h-8 w-8 rounded-full bg-rose-50 flex items-center justify-center">
+                <Timer className="h-4 w-4 text-rose-600" />
+              </div>
+              Overdue Replies
+              <span className="text-xs font-bold bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full">{slaBreaches.length}</span>
+            </CardTitle>
+            <p className="text-xs text-gray-400 mt-1">Open chats you haven&apos;t replied to within the SLA — please respond.</p>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="divide-y divide-gray-50 max-h-96 overflow-y-auto">
+              {slaBreaches.map((c: any) => {
+                const m = c.minutesWaiting ?? 0;
+                const wait = m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+                return (
+                  <Link key={c.id} href={`/dashboard/conversations?id=${c.id}`}
+                    className="flex items-center gap-3 px-5 py-3 hover:bg-rose-50/40 transition-colors">
+                    <div className="h-8 w-8 rounded-full bg-rose-100 flex items-center justify-center flex-shrink-0">
+                      <MessageSquare className="h-4 w-4 text-rose-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{c.customerName || c.customerPhone}</p>
+                      <p className="text-xs text-gray-400 truncate">{c.customerName ? c.customerPhone : (c.sessionPhoneNumber ?? '')}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-sm font-bold text-rose-600">{wait}</p>
+                      <p className="text-[11px] text-gray-400">SLA {c.slaMinutes}m</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-gray-300 flex-shrink-0" />
+                  </Link>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6 mb-6 lg:mb-8">

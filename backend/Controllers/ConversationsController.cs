@@ -77,6 +77,17 @@ public class ConversationsController : ControllerBase
         return Ok(counts);
     }
 
+    // GET /api/conversations/sla-breaches?userId= — the user's own OPEN chats awaiting a reply past
+    // the session's First-Response SLA. Defaults to the authenticated caller when userId is omitted.
+    [HttpGet("sla-breaches")]
+    public async Task<IActionResult> GetSlaBreaches([FromQuery] int? userId = null)
+    {
+        var uid = userId ?? CallerUserId();
+        if (uid == null) return Ok(Array.Empty<object>());
+        var rows = await _conversationService.GetSlaBreachesAsync(uid.Value);
+        return Ok(rows);
+    }
+
     // Total conversations per session (accurate, not page-limited) — for the session list badges.
     [HttpGet("counts-by-session")]
     public async Task<IActionResult> GetCountsBySession([FromQuery] int? assignedUserId = null)

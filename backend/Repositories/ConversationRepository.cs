@@ -86,6 +86,38 @@ public class ConversationRepository
         return result.ToList();
     }
 
+    /// <summary>
+    /// Open conversations assigned to <paramref name="userId"/> that are awaiting the agent's reply
+    /// PAST the session's First-Response SLA: the last message is inbound, there is no outbound after
+    /// it, and the wait already exceeds the session's SlaMinutes. Longest-waiting first.
+    /// </summary>
+    public async Task<List<SlaBreachRow>> GetSlaBreachesForUserAsync(int userId)
+    {
+        using var conn = _db.CreateConnection();
+        var sql = @"
+            SELECT c.Id, c.CustomerName, c.CustomerPhone, c.SessionId,
+                   s.PhoneNumber AS SessionPhoneNumber,
+                   li.LastInboundAt,
+                   DATEDIFF(MINUTE, li.LastInboundAt, GETUTCDATE()) AS MinutesWaiting,
+                   s.SlaMinutes
+            FROM Conversations c
+            JOIN WhatsAppSessions s ON s.Id = c.SessionId
+            CROSS APPLY (
+                SELECT MAX(m.CreatedAt) AS LastInboundAt
+                FROM Messages m
+                WHERE m.ConversationId = c.Id AND m.Direction = 'inbound'
+            ) li
+            WHERE c.AssignedUserId = @UserId
+              AND c.Status = 'Open'
+              AND li.LastInboundAt IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM Messages o
+                  WHERE o.ConversationId = c.Id AND o.Direction = 'outbound' AND o.CreatedAt > li.LastInboundAt)
+              AND DATEDIFF(MINUTE, li.LastInboundAt, GETUTCDATE()) > s.SlaMinutes
+            ORDER BY MinutesWaiting DESC";
+        return (await conn.QueryAsync<SlaBreachRow>(sql, new { UserId = userId })).ToList();
+    }
+
     /// <summary>Records that a user has viewed a conversation (upsert into ConversationViews).</summary>
     public async Task MarkViewedAsync(int conversationId, int userId)
     {
@@ -329,4 +361,17 @@ public class ConversationListRow
     public string? SummaryText { get; set; }
     public bool HasAiMessages { get; set; }
     public bool IsUnread { get; set; }
+}
+
+// Open chats awaiting the agent's reply past the session's First-Response SLA (Overview → CRR list).
+public class SlaBreachRow
+{
+    public int Id { get; set; }
+    public string? CustomerName { get; set; }
+    public string CustomerPhone { get; set; } = string.Empty;
+    public int SessionId { get; set; }
+    public string? SessionPhoneNumber { get; set; }
+    public DateTime LastInboundAt { get; set; }
+    public int MinutesWaiting { get; set; }
+    public int SlaMinutes { get; set; }
 }

@@ -109,6 +109,10 @@ public class ConversationService
     public Task<List<SessionConvCount>> GetCountsBySessionAsync(IReadOnlyList<int>? assignedUserIds = null)
         => _conversationRepo.GetCountsBySessionAsync(assignedUserIds);
 
+    /// <summary>Open chats assigned to this user that are overdue for a reply past the session SLA.</summary>
+    public Task<List<SlaBreachRow>> GetSlaBreachesAsync(int userId)
+        => _conversationRepo.GetSlaBreachesForUserAsync(userId);
+
     public async Task<Conversation?> GetOrCreateConversationAsync(int sessionId, string customerPhone, string? customerName = null)
     {
         // Try to get existing conversation

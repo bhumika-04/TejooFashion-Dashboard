@@ -152,6 +152,10 @@ export const conversationsApi = {
     return apiClient.get(`/conversations/counts-by-session?${params}`);
   },
 
+  // Open chats assigned to the user that are overdue for a reply past the session SLA.
+  getSlaBreaches: (userId?: number) =>
+    apiClient.get('/conversations/sla-breaches', { params: userId ? { userId } : {} }),
+
   updateStatus: (id: number, status: string) =>
     apiClient.put(`/conversations/${id}/status`, { status }),
 
