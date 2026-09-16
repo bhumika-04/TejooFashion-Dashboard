@@ -15,6 +15,8 @@ public class WhatsAppSessionDTO
     public int SlaMinutes { get; set; }
     public int MessagesToday { get; set; }   // inbound (customer) messages today
     public int OutboundToday { get; set; }   // outbound messages today
+    public int InboundCustomersToday { get; set; }   // distinct customers who messaged today
+    public int OutboundCustomersToday { get; set; }  // distinct customers replied to today
     public DateTime? LastActiveAt { get; set; }
     public DateTime? LastInboundAt { get; set; }   // newest inbound message — drives the "receiving / stale" indicator
     public DateTime CreatedAt { get; set; }

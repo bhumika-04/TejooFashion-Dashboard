@@ -389,14 +389,14 @@ export default function SessionsPage() {
                   <span className="font-semibold text-gray-900">{session.assignedUserName || '—'}</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-gray-50">
-                  <span className="text-gray-400 font-medium">Messages today</span>
+                  <span className="text-gray-400 font-medium">Customers today</span>
                   <span className="flex items-center gap-2 font-semibold">
-                    <span className="inline-flex items-center gap-1 text-amber-600" title="Inbound (customer)">
-                      <ArrowDownLeft className="h-3.5 w-3.5" />{session.messagesToday || 0}
+                    <span className="inline-flex items-center gap-1 text-amber-600" title="Distinct customers who messaged today">
+                      <ArrowDownLeft className="h-3.5 w-3.5" />{session.inboundCustomersToday || 0}
                     </span>
                     <span className="text-gray-300">·</span>
-                    <span className="inline-flex items-center gap-1 text-cyan-600" title="Outbound (sent)">
-                      <ArrowUpRight className="h-3.5 w-3.5" />{session.outboundToday || 0}
+                    <span className="inline-flex items-center gap-1 text-cyan-600" title="Distinct customers replied to today">
+                      <ArrowUpRight className="h-3.5 w-3.5" />{session.outboundCustomersToday || 0}
                     </span>
                   </span>
                 </div>

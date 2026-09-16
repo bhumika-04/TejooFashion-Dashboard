@@ -229,6 +229,8 @@ public class WhatsAppSessionsController : ControllerBase
             SlaMinutes = session.SlaMinutes,
             MessagesToday = session.MessagesToday,
             OutboundToday = session.OutboundToday,
+            InboundCustomersToday = session.InboundCustomersToday,
+            OutboundCustomersToday = session.OutboundCustomersToday,
             LastActiveAt = session.LastActiveAt,
             LastInboundAt = session.LastInboundAt,
             CreatedAt = session.CreatedAt,

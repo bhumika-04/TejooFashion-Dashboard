@@ -69,7 +69,22 @@ public class WhatsAppSessionRepository
                       WHERE c.SessionId = ws.Id
                         AND m.Direction = 'outbound'
                         AND CAST(DATEADD(MINUTE,330,m.CreatedAt) AS DATE)
-                          = CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE)) AS OutboundToday
+                          = CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE)) AS OutboundToday,
+                   -- distinct customers (not messages) who messaged / were replied to today
+                   (SELECT COUNT(DISTINCT c.CustomerPhone)
+                      FROM Messages m
+                      INNER JOIN Conversations c ON c.Id = m.ConversationId
+                      WHERE c.SessionId = ws.Id
+                        AND m.Direction = 'inbound'
+                        AND CAST(DATEADD(MINUTE,330,m.CreatedAt) AS DATE)
+                          = CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE)) AS InboundCustomersToday,
+                   (SELECT COUNT(DISTINCT c.CustomerPhone)
+                      FROM Messages m
+                      INNER JOIN Conversations c ON c.Id = m.ConversationId
+                      WHERE c.SessionId = ws.Id
+                        AND m.Direction = 'outbound'
+                        AND CAST(DATEADD(MINUTE,330,m.CreatedAt) AS DATE)
+                          = CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE)) AS OutboundCustomersToday
             FROM WhatsAppSessions ws
             LEFT JOIN Users u ON ws.AssignedUserId = u.Id
             WHERE 1=1";
@@ -187,4 +202,6 @@ public class WhatsAppSessionWithUser : TejooWhatsApp.Models.Entities.WhatsAppSes
     public string AssignedUserName { get; set; } = string.Empty;
     public DateTime? LastInboundAt { get; set; }   // newest inbound message across this session's conversations
     public int OutboundToday { get; set; }         // outbound messages today (IST); MessagesToday holds inbound
+    public int InboundCustomersToday { get; set; } // distinct customers who messaged today
+    public int OutboundCustomersToday { get; set; }// distinct customers replied to today
 }
