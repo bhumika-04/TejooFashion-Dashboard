@@ -128,24 +128,16 @@ public class NotificationService
             CustomerName = customerName
         };
 
-        // Persist + push to the assigned user — the only durable notification.
+        // Notifications are personal: ONLY the assigned user is notified (persist + live push).
         await SendToUserAsync(userId, notification);
 
-        // Supervisors (Admin/HOD/Manager) get a LIVE ping for visibility, but NOT a stored row.
-        var supervisors = await _userRepo.GetAllAsync(isActive: true);
-        foreach (var sup in supervisors.Where(u => u.Id != userId &&
-            (u.Role == "Admin" || u.Role == "HOD" || u.Role == "Manager")))
-        {
-            await PushLiveToUserAsync(sup.Id, notification);
-        }
-
-        // Anyone currently viewing this conversation (ephemeral).
+        // Anyone currently viewing this conversation gets a live chat update (ephemeral, not a stored notification).
         await _hubContext.Clients.Group($"conv_{conversationId}").SendAsync("ReceiveNotification", notification);
     }
 
-    // New message on an UNASSIGNED conversation. Live-pushes to everyone, but persists only to Admins
-    // so an unattended conversation still has a durable, owner-visible record — without writing a row
-    // for all ~37 users on every inbound message.
+    // New message on an UNASSIGNED conversation. Notifications are personal, so an unassigned
+    // conversation (no owner yet) produces NO stored notification for anyone. It only pushes a live
+    // chat update to whoever is currently viewing that conversation.
     public async Task NotifyUnassignedMessageAsync(int conversationId, string customerPhone, string customerName, string messagePreview)
     {
         var notification = new NotificationMessage
@@ -158,15 +150,9 @@ public class NotificationService
             CustomerName = customerName
         };
 
-        // Live push to everyone connected (ephemeral).
-        await _hubContext.Clients.All.SendAsync("ReceiveNotification", notification);
-
-        // Persist only to Admins so it isn't lost.
-        var admins = await _userRepo.GetAllAsync(isActive: true);
-        foreach (var admin in admins.Where(u => u.Role == "Admin"))
-            await PersistAsync(admin.Id, notification);
-
-        _logger.LogInformation("✓ Unassigned-message notification (live broadcast, persisted to Admins) — conv {Conv}", conversationId);
+        // Live update to anyone viewing this conversation only — no broadcast, no stored notification.
+        await _hubContext.Clients.Group($"conv_{conversationId}").SendAsync("ReceiveNotification", notification);
+        _logger.LogInformation("Unassigned-message live update only (no stored notification) — conv {Conv}", conversationId);
     }
 
     // Notify about escalation
