@@ -44,22 +44,23 @@ public class CustomerRepository
         return await conn.QueryAsync<Customer>(sql, new { Search = search });
     }
 
-    public async Task<(IEnumerable<Customer> Customers, int Total)> GetPagedAsync(string? search, int page, int pageSize, int? tagId = null, int? convTagId = null, int? assignedUserId = null)
+    public async Task<(IEnumerable<Customer> Customers, int Total)> GetPagedAsync(string? search, int page, int pageSize, IReadOnlyList<int>? tagIds = null, IReadOnlyList<int>? convTagIds = null, int? assignedUserId = null)
     {
         using var conn = _db.CreateConnection();
         var conditions = new List<string>();
         if (!string.IsNullOrEmpty(search))
             conditions.Add("(c.Phone LIKE '%' + @Search + '%' OR c.Name LIKE '%' + @Search + '%' OR c.Email LIKE '%' + @Search + '%')");
-        if (tagId.HasValue)
-            conditions.Add("EXISTS (SELECT 1 FROM CustomerTags ct WHERE ct.CustomerId = c.Id AND ct.TagId = @TagId)");
-        // Conversation-tag filter: customers who have at least one conversation carrying this tag.
-        if (convTagId.HasValue)
-            conditions.Add("EXISTS (SELECT 1 FROM Conversations cv JOIN ConversationTags cvt ON cvt.ConversationId = cv.Id WHERE cv.CustomerPhone = c.Phone AND cvt.TagId = @ConvTagId)");
+        // Customer-tag filter: any of the selected tags (OR within the category).
+        if (tagIds != null && tagIds.Count > 0)
+            conditions.Add("EXISTS (SELECT 1 FROM CustomerTags ct WHERE ct.CustomerId = c.Id AND ct.TagId IN @TagIds)");
+        // Conversation-tag filter: customers who have at least one conversation carrying any of these tags.
+        if (convTagIds != null && convTagIds.Count > 0)
+            conditions.Add("EXISTS (SELECT 1 FROM Conversations cv JOIN ConversationTags cvt ON cvt.ConversationId = cv.Id WHERE cv.CustomerPhone = c.Phone AND cvt.TagId IN @ConvTagIds)");
         // CRR/agent scoping: only customers who have a conversation assigned to this user.
         if (assignedUserId.HasValue)
             conditions.Add("EXISTS (SELECT 1 FROM Conversations cv WHERE cv.CustomerPhone = c.Phone AND cv.AssignedUserId = @AssignedUserId)");
         var where = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
-        var p = new { Search = search, TagId = tagId, ConvTagId = convTagId, AssignedUserId = assignedUserId };
+        var p = new { Search = search, TagIds = tagIds, ConvTagIds = convTagIds, AssignedUserId = assignedUserId };
 
         var total = await conn.ExecuteScalarAsync<int>(
             $"SELECT COUNT(*) FROM Customers c {where}", p);

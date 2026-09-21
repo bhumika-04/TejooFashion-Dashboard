@@ -35,6 +35,7 @@ public class ConversationDetailDTO
     public DateTime? LastMessageAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? ClosedAt { get; set; }
+    public string? Notes { get; set; }   // agent's private notes for this chat
 }
 
 public class ConversationSummaryDTO
@@ -58,6 +59,11 @@ public class UpdateConversationRequest
     public string? Status { get; set; }
     public string? Priority { get; set; }
     public int? AssignedUserId { get; set; }
+}
+
+public class UpdateNotesRequest
+{
+    public string? Notes { get; set; }
 }
 
 public class AssignConversationRequest

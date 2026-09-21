@@ -1,4 +1,5 @@
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging;
 using TejooWhatsApp.AI;
 using TejooWhatsApp.Models.DTOs;
 using TejooWhatsApp.Models.Entities;
@@ -18,6 +19,7 @@ public class ConversationService
     private readonly CustomerRepository _customerRepo;
     private readonly TagRepository _tagRepo;
     private readonly EscalationRepository _escalationRepo;
+    private readonly ILogger<ConversationService> _logger;
 
     public ConversationService(
         ConversationRepository conversationRepo,
@@ -29,7 +31,8 @@ public class ConversationService
         NotificationService notificationService,
         CustomerRepository customerRepo,
         TagRepository tagRepo,
-        EscalationRepository escalationRepo)
+        EscalationRepository escalationRepo,
+        ILogger<ConversationService> logger)
     {
         _conversationRepo = conversationRepo;
         _messageRepo = messageRepo;
@@ -41,6 +44,7 @@ public class ConversationService
         _customerRepo = customerRepo;
         _tagRepo = tagRepo;
         _escalationRepo = escalationRepo;
+        _logger = logger;
     }
 
     public async Task<ConversationDetailDTO?> GetConversationDetailAsync(int id)
@@ -66,7 +70,8 @@ public class ConversationService
             Messages = messages.Select(MapToMessageDTO).ToList(),
             LastMessageAt = conversation.LastMessageAt,
             CreatedAt = conversation.CreatedAt,
-            ClosedAt = conversation.ClosedAt
+            ClosedAt = conversation.ClosedAt,
+            Notes = conversation.Notes
         };
     }
 
@@ -79,9 +84,10 @@ public class ConversationService
         int? sessionId = null,
         int limit = 100,
         int offset = 0,
-        int? viewerUserId = null)
+        int? viewerUserId = null,
+        int? tagId = null)
     {
-        var rows = await _conversationRepo.GetAllWithLastMessageAsync(status, assignedUserIds, sessionId, limit, offset, viewerUserId);
+        var rows = await _conversationRepo.GetAllWithLastMessageAsync(status, assignedUserIds, sessionId, limit, offset, viewerUserId, tagId);
 
         return rows.Select(row => new ConversationListDTO
         {
@@ -112,6 +118,28 @@ public class ConversationService
     /// <summary>Open chats assigned to this user that are overdue for a reply past the session SLA.</summary>
     public Task<List<SlaBreachRow>> GetSlaBreachesAsync(int userId)
         => _conversationRepo.GetSlaBreachesForUserAsync(userId);
+
+    /// <summary>Save the agent's private notes for a conversation.</summary>
+    public Task UpdateNotesAsync(int id, string? notes) => _conversationRepo.UpdateNotesAsync(id, notes);
+
+    /// <summary>
+    /// CRR resolved this by calling the customer directly instead of replying in chat. Records the
+    /// call as an outbound reply (so it counts as a first response — no SLA breach) and closes the chat.
+    /// </summary>
+    public async Task ResolveViaCallAsync(int conversationId)
+    {
+        await _messageRepo.CreateAsync(new Message
+        {
+            ConversationId = conversationId,
+            Direction = "outbound",
+            MessageType = "text",
+            Content = "📞 Resolved via a direct phone call.",
+            IsAiGenerated = false,
+            CreatedAt = DateTime.UtcNow,
+        });
+        await _conversationRepo.UpdateLastMessageAtAsync(conversationId);
+        await _conversationRepo.UpdateStatusAsync(conversationId, "Closed");
+    }
 
     public async Task<Conversation?> GetOrCreateConversationAsync(int sessionId, string customerPhone, string? customerName = null)
     {
@@ -195,17 +223,26 @@ public class ConversationService
         var updated = await _conversationRepo.UpdateAssignedUserAsync(conversationId, assignedUserId);
         if (!updated) return false;
 
-        // Notify the newly assigned user via SignalR (skip when unassigning)
+        // Notify the newly assigned user via SignalR (skip when unassigning). A notification
+        // failure must NOT fail the assignment — the DB update above already succeeded, so
+        // swallow any error here rather than 500 the request (which looks like "reassign didn't work").
         if (assignedUserId > 0)
         {
-            var conversation = await _conversationRepo.GetByIdAsync(conversationId);
-            if (conversation != null)
+            try
             {
-                await _notificationService.NotifyConversationAssignedAsync(
-                    assignedUserId,
-                    conversationId,
-                    conversation.CustomerPhone,
-                    conversation.CustomerName ?? conversation.CustomerPhone);
+                var conversation = await _conversationRepo.GetByIdAsync(conversationId);
+                if (conversation != null)
+                {
+                    await _notificationService.NotifyConversationAssignedAsync(
+                        assignedUserId,
+                        conversationId,
+                        conversation.CustomerPhone,
+                        conversation.CustomerName ?? conversation.CustomerPhone);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Assignment of conversation #{ConversationId} to user #{UserId} succeeded, but the notification failed.", conversationId, assignedUserId);
             }
         }
 

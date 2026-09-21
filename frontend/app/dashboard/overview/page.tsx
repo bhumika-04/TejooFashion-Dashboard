@@ -7,6 +7,7 @@ import { dashboardApi, conversationsApi } from '@/services/api';
 import { MessageSquare, Phone, AlertTriangle, Users, Zap, Timer, ChevronRight } from 'lucide-react';
 import { AreaChart, Area, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { KPICard } from '@/components/ui/kpi-card';
+import { formatNumber } from '@/lib/utils';
 import { rangeToDates, DASHBOARD_RANGE_EVENT, DashboardRangeDetail } from '@/lib/dateRange';
 
 const REFRESH_INTERVAL = 30_000; // 30 seconds
@@ -102,7 +103,7 @@ export default function DashboardPage() {
           value={stats?.totalConversations || 0}
           icon={MessageSquare}
           theme="blue"
-          subtitleText={`${stats?.openConversations || 0} open · ${stats?.closedConversations || 0} closed`}
+          subtitleText={`${formatNumber(stats?.totalCustomers || 0)} customers · ${formatNumber(stats?.todayMessages || 0)} messages`}
         />
         <KPICard index={1}
           title="Active Sessions"

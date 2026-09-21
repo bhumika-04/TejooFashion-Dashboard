@@ -37,7 +37,8 @@ public class ConversationRepository
         int? sessionId = null,
         int limit = 100,
         int offset = 0,
-        int? viewerUserId = null)
+        int? viewerUserId = null,
+        int? tagId = null)
     {
         using var conn = _db.CreateConnection();
         // IsUnread = the conversation has an inbound message newer than the viewer's last view
@@ -78,11 +79,21 @@ public class ConversationRepository
         if (sessionId.HasValue)
             sql += " AND c.SessionId = @SessionId";
 
+        // A saved "view" = filter to one tag. Match either a conversation tag on the chat
+        // itself, or a customer tag on the chat's customer (e.g. "VIP" tagged on the customer).
+        if (tagId.HasValue)
+            sql += @" AND (
+                EXISTS (SELECT 1 FROM ConversationTags ctag
+                        WHERE ctag.ConversationId = c.Id AND ctag.TagId = @TagId)
+                OR EXISTS (SELECT 1 FROM CustomerTags cust
+                           JOIN Customers cu ON cu.Id = cust.CustomerId
+                           WHERE cu.Phone = c.CustomerPhone AND cust.TagId = @TagId))";
+
         sql += @" ORDER BY CASE WHEN c.LastMessageAt IS NULL THEN 1 ELSE 0 END, c.LastMessageAt DESC, c.CreatedAt DESC
                   OFFSET @Offset ROWS FETCH NEXT @Limit ROWS ONLY";
 
         var result = await conn.QueryAsync<ConversationListRow>(sql,
-            new { Status = status, AssignedUserIds = assignedUserIds, SessionId = sessionId, Offset = offset, Limit = limit, ViewerUserId = viewerUserId });
+            new { Status = status, AssignedUserIds = assignedUserIds, SessionId = sessionId, Offset = offset, Limit = limit, ViewerUserId = viewerUserId, TagId = tagId });
         return result.ToList();
     }
 
@@ -223,6 +234,12 @@ public class ConversationRepository
 
         var rows = await conn.ExecuteAsync(sql, new { Id = id, Status = status });
         return rows > 0;
+    }
+
+    public async Task UpdateNotesAsync(int id, string? notes)
+    {
+        using var conn = _db.CreateConnection();
+        await conn.ExecuteAsync("UPDATE Conversations SET Notes = @Notes WHERE Id = @Id", new { Id = id, Notes = notes });
     }
 
     public async Task UpdateLastMessageAtAsync(int conversationId)

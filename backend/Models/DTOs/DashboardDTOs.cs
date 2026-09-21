@@ -3,6 +3,7 @@ namespace TejooWhatsApp.Models.DTOs;
 public class DashboardStatsDTO
 {
     public int TotalConversations { get; set; }
+    public int TotalCustomers { get; set; }   // distinct customers with a conversation in the window
     public int OpenConversations { get; set; }
     public int ClosedConversations { get; set; }
     public int EscalatedConversations { get; set; }
@@ -47,6 +48,8 @@ public class AgentPerformanceDTO
     public int UserId { get; set; }
     public string UserName { get; set; } = string.Empty;
     public string Role { get; set; } = string.Empty;
+    public int UniqueCustomers { get; set; }   // distinct customers this agent handled in the period (headline metric)
+    public int MessagesSent { get; set; }       // outbound messages the agent sent in the period
     public int ConversationsHandled { get; set; }
     public int ActiveConversations { get; set; }
     public int ClosedInPeriod { get; set; }
@@ -62,6 +65,8 @@ public class AgentStatsDTO
     public int UserId { get; set; }
     public string UserName { get; set; } = string.Empty;
     public string Role { get; set; } = string.Empty;
+    public int UniqueCustomers { get; set; }
+    public int MessagesSent { get; set; }
     public int TotalConversations { get; set; }
     public int ActiveConversations { get; set; }
     public int ResolvedConversations { get; set; }
@@ -128,6 +133,7 @@ public class ResolutionReport
 {
     public int Days { get; set; }
     public int TotalConversations { get; set; }     // created in period
+    public int ActiveCustomers { get; set; }        // distinct customers with a conversation in period
     public int TotalClosed { get; set; }            // closed in period
     public double? AvgResolutionMinutes { get; set; }
     public int AiHandled { get; set; }              // only AI replied

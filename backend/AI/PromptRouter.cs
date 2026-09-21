@@ -82,6 +82,14 @@ public class AiRouterService
             // Inject the running conversation summary so the AI has long-term memory beyond the last 10
             // messages (important for long or reopened chats, and after 30-day retention trims history).
             var specialistSystem = specialistPrompt.SystemPrompt;
+
+            // Match the customer's language: reply in whatever they use (Hindi / Hinglish / English).
+            // Only the "reply" VALUE follows their language — keep all JSON keys and other fields in English.
+            specialistSystem +=
+                "\n\n[Language] Detect the language and script of the customer's latest message and write the \"reply\" in the SAME one: " +
+                "if they write in Hindi (Devanagari) reply in Hindi, if in Hinglish/Romanized Hindi reply in Hinglish, if in English reply in English. " +
+                "Mirror their tone and formality. Do NOT translate to English by default. Keep the JSON keys and structure exactly as specified (in English).";
+
             if (!string.IsNullOrWhiteSpace(summaryContext))
                 specialistSystem += $"\n\n[Context — summary of the earlier conversation so far; use it but do not repeat it verbatim]:\n{summaryContext}";
 

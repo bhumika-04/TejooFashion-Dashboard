@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { createPortal } from 'react-dom';
-import { customersApi, tagsApi } from '@/services/api';
+import { customersApi, tagsApi, usersApi } from '@/services/api';
 import { Search, Phone, Mail, MessageSquare, RefreshCw, X, Users, UserCheck, Sparkles, Clock, Tag, Plus, Check, Download, Filter, ChevronDown } from 'lucide-react';
 import { getRelativeTime } from '@/lib/utils';
 import { KPICard } from '@/components/ui/kpi-card';
@@ -17,8 +17,11 @@ export default function CustomersPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [filterTagId, setFilterTagId] = useState<number | null>(null);
-  const [filterConvTagId, setFilterConvTagId] = useState<number | null>(null);
+  // Multi-select tag filters (any-of within each category) + optional per-CRR filter (admins only).
+  const [filterTagIds, setFilterTagIds] = useState<number[]>([]);
+  const [filterConvTagIds, setFilterConvTagIds] = useState<number[]>([]);
+  const [filterUserId, setFilterUserId] = useState<number | null>(null);
+  const [crrUsers, setCrrUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [conversations, setConversations] = useState<any[]>([]);
@@ -43,10 +46,25 @@ export default function CustomersPage() {
   const PAGE_SIZE = 100;
   const searchTimer = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchCustomers = async (p = page, q = search, tagId = filterTagId, convTagId = filterConvTagId) => {
+  // CRR/agents only ever see their own customers (enforced server-side); privileged roles may
+  // review any single CRR's customers + tagging via the CRR filter.
+  const currentUser = (() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
+  })();
+  const isPrivileged = !['CRR', 'AGENT'].includes((currentUser.role ?? currentUser.Role ?? '').toUpperCase());
+
+  const fetchCustomers = async (
+    p = page, q = search,
+    tagIds = filterTagIds, convTagIds = filterConvTagIds, userId = filterUserId,
+  ) => {
     setLoading(true);
     try {
-      const res = await customersApi.getAll(q || undefined, p, PAGE_SIZE, tagId ?? undefined, convTagId ?? undefined);
+      const res = await customersApi.getAll(
+        q || undefined, p, PAGE_SIZE,
+        tagIds.length ? tagIds : undefined,
+        convTagIds.length ? convTagIds : undefined,
+        userId ?? undefined,
+      );
       setCustomers(res.data.customers ?? []);
       setTotal(res.data.total ?? 0);
     } catch {
@@ -66,6 +84,13 @@ export default function CustomersPage() {
     customersApi.getStats().then(r => setStats(r.data)).catch(() => {});
     tagsApi.getAll('customer').then(r => setAllTags(r.data ?? [])).catch(() => {});
     tagsApi.getAll('conversation').then(r => setAllConvTags(r.data ?? [])).catch(() => {});
+    // CRR list for the per-agent filter (privileged roles only).
+    if (isPrivileged) {
+      usersApi.getAll(true).then(r => {
+        const list = (r.data ?? []).filter((u: any) => ['CRR', 'AGENT'].includes((u.role ?? '').toUpperCase()));
+        setCrrUsers(list.length ? list : (r.data ?? []));
+      }).catch(() => {});
+    }
     // Close tag menu on outside click
     const handler = (e: MouseEvent) => {
       if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node)) setShowTagMenu(false);
@@ -97,25 +122,50 @@ export default function CustomersPage() {
     fetchCustomers(p, search);
   };
 
-  const handleTagFilter = (tagId: number | null) => {
-    const next = filterTagId === tagId ? null : tagId;
-    setFilterTagId(next);
+  const toggle = (list: number[], id: number) =>
+    list.includes(id) ? list.filter(x => x !== id) : [...list, id];
+
+  const handleTagFilter = (tagId: number) => {
+    const next = toggle(filterTagIds, tagId);
+    setFilterTagIds(next);
     setPage(1);
-    fetchCustomers(1, search, next, filterConvTagId);
+    fetchCustomers(1, search, next, filterConvTagIds, filterUserId);
   };
 
-  const handleConvTagFilter = (tagId: number | null) => {
-    const next = filterConvTagId === tagId ? null : tagId;
-    setFilterConvTagId(next);
+  const handleConvTagFilter = (tagId: number) => {
+    const next = toggle(filterConvTagIds, tagId);
+    setFilterConvTagIds(next);
     setPage(1);
-    fetchCustomers(1, search, filterTagId, next);
+    fetchCustomers(1, search, filterTagIds, next, filterUserId);
   };
+
+  const handleUserFilter = (userId: number | null) => {
+    const next = filterUserId === userId ? null : userId;
+    setFilterUserId(next);
+    setPage(1);
+    fetchCustomers(1, search, filterTagIds, filterConvTagIds, next);
+  };
+
+  const clearAllFilters = () => {
+    setFilterTagIds([]);
+    setFilterConvTagIds([]);
+    setFilterUserId(null);
+    setPage(1);
+    fetchCustomers(1, search, [], [], null);
+  };
+
+  const activeFilterCount = filterTagIds.length + filterConvTagIds.length + (filterUserId ? 1 : 0);
 
   // Export the current (searched / filtered) customer list to CSV.
   const exportCsv = async () => {
     setExporting(true);
     try {
-      const res = await customersApi.getAll(search || undefined, 1, Math.max(total, 1), filterTagId ?? undefined, filterConvTagId ?? undefined);
+      const res = await customersApi.getAll(
+        search || undefined, 1, Math.max(total, 1),
+        filterTagIds.length ? filterTagIds : undefined,
+        filterConvTagIds.length ? filterConvTagIds : undefined,
+        filterUserId ?? undefined,
+      );
       const rows: any[] = res.data.customers ?? [];
       const tagNames = (raw?: string) => (raw || '').split(';;').filter(Boolean).map(t => t.split('|')[0]).join('; ');
       const cell = (v: any) => {
@@ -263,35 +313,57 @@ export default function CustomersPage() {
             )}
           </div>
 
-          {/* Filter dropdown (customer + conversation tags) */}
-          {(allTags.length > 0 || allConvTags.length > 0) && (
+          {/* Filter dropdown (customer + conversation tags, multi-select; + CRR for admins) */}
+          {(allTags.length > 0 || allConvTags.length > 0 || (isPrivileged && crrUsers.length > 0)) && (
             <div className="relative flex-shrink-0" ref={filterMenuRef}>
               <button
                 onClick={() => setShowFilterMenu(v => !v)}
                 className={`flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border transition-colors ${
-                  (filterTagId || filterConvTagId) ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                  activeFilterCount > 0 ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
                 }`}
               >
                 <Filter className="h-4 w-4" /> Filter
-                {(filterTagId || filterConvTagId) && <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />}
+                {activeFilterCount > 0 && (
+                  <span className="min-w-[16px] h-4 px-1 inline-flex items-center justify-center text-[10px] font-bold rounded-full bg-emerald-600 text-white leading-none">
+                    {activeFilterCount}
+                  </span>
+                )}
                 <ChevronDown className="h-3.5 w-3.5" />
               </button>
               {showFilterMenu && (
                 <div className="absolute right-0 mt-1 w-64 max-h-[70vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3 space-y-3">
+                  {activeFilterCount > 0 && (
+                    <button onClick={clearAllFilters}
+                      className="w-full text-[11px] font-semibold text-gray-500 hover:text-red-600 border border-gray-200 hover:border-red-200 rounded-lg py-1.5 flex items-center justify-center gap-1">
+                      <X className="h-3 w-3" /> Clear all filters
+                    </button>
+                  )}
+                  {/* CRR / agent — admins only */}
+                  {isPrivileged && crrUsers.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-2">CRR / Agent</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {crrUsers.map(u => {
+                          const active = filterUserId === u.id;
+                          return (
+                            <button key={u.id} onClick={() => handleUserFilter(u.id)}
+                              className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all ${
+                                active ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                              }`}>
+                              {u.fullName ?? u.name ?? u.email}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   {/* Customer tags */}
                   {allTags.length > 0 && (
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Customer tags</p>
-                        {filterTagId && (
-                          <button onClick={() => handleTagFilter(null)} className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-0.5">
-                            <X className="h-3 w-3" /> Clear
-                          </button>
-                        )}
-                      </div>
+                    <div className={isPrivileged && crrUsers.length > 0 ? 'border-t border-gray-100 pt-3' : ''}>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-2">Customer tags</p>
                       <div className="flex flex-wrap gap-1.5">
                         {allTags.map(tag => {
-                          const active = filterTagId === tag.id;
+                          const active = filterTagIds.includes(tag.id);
                           return (
                             <button key={tag.id} onClick={() => handleTagFilter(tag.id)}
                               className="text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all"
@@ -307,18 +379,11 @@ export default function CustomersPage() {
                   )}
                   {/* Conversation tags */}
                   {allConvTags.length > 0 && (
-                    <div className={allTags.length > 0 ? 'border-t border-gray-100 pt-3' : ''}>
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Conversation tags</p>
-                        {filterConvTagId && (
-                          <button onClick={() => handleConvTagFilter(null)} className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-0.5">
-                            <X className="h-3 w-3" /> Clear
-                          </button>
-                        )}
-                      </div>
+                    <div className={(allTags.length > 0 || (isPrivileged && crrUsers.length > 0)) ? 'border-t border-gray-100 pt-3' : ''}>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-2">Conversation tags</p>
                       <div className="flex flex-wrap gap-1.5">
                         {allConvTags.map(tag => {
-                          const active = filterConvTagId === tag.id;
+                          const active = filterConvTagIds.includes(tag.id);
                           return (
                             <button key={tag.id} onClick={() => handleConvTagFilter(tag.id)}
                               className="text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all"

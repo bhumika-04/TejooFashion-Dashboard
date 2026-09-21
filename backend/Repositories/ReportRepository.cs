@@ -31,6 +31,7 @@ public class ReportRepository
         var convStats = await conn.QueryFirstOrDefaultAsync<dynamic>(@"
             SELECT
                 COUNT(*) as TotalConversations,
+                COUNT(DISTINCT CustomerPhone) as TotalCustomers,
                 SUM(CASE WHEN Status = 'Open' THEN 1 ELSE 0 END) as OpenConversations,
                 SUM(CASE WHEN Status = 'Closed' THEN 1 ELSE 0 END) as ClosedConversations,
                 SUM(CASE WHEN Status = 'Escalated' THEN 1 ELSE 0 END) as EscalatedConversations
@@ -38,6 +39,7 @@ public class ReportRepository
             WHERE CAST(DATEADD(MINUTE, 330, CreatedAt) AS DATE) BETWEEN @From AND @To", range);
 
         stats.TotalConversations = convStats?.TotalConversations ?? 0;
+        stats.TotalCustomers = convStats?.TotalCustomers ?? 0;
         stats.OpenConversations = convStats?.OpenConversations ?? 0;
         stats.ClosedConversations = convStats?.ClosedConversations ?? 0;
         stats.EscalatedConversations = convStats?.EscalatedConversations ?? 0;
@@ -135,6 +137,8 @@ public class ReportRepository
                 u.Id                                                        AS UserId,
                 u.FullName                                                  AS UserName,
                 u.Role,
+                COUNT(DISTINCT c.CustomerPhone)                            AS UniqueCustomers,
+                ISNULL(MAX(msg.MessagesSent), 0)                           AS MessagesSent,
                 COUNT(DISTINCT c.Id)                                        AS TotalConversations,
                 SUM(CASE WHEN c.Status = 'Open' THEN 1 ELSE 0 END)         AS ActiveConversations,
                 SUM(CASE WHEN c.Status = 'Closed' THEN 1 ELSE 0 END)       AS ResolvedConversations,
@@ -146,9 +150,19 @@ public class ReportRepository
             FROM Users u
             LEFT JOIN Conversations c ON c.AssignedUserId = u.Id
                 AND CAST(DATEADD(MINUTE,330,c.CreatedAt) AS DATE) >= DATEADD(day, -(@Days - 1), CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE))
+            LEFT JOIN (
+                -- Outbound messages each agent sent within the same IST day window (one row per user).
+                SELECT c2.AssignedUserId, COUNT(*) AS MessagesSent
+                FROM Messages m2
+                JOIN Conversations c2 ON c2.Id = m2.ConversationId
+                WHERE m2.Direction = 'outbound'
+                  AND c2.AssignedUserId > 0
+                  AND CAST(DATEADD(MINUTE,330,m2.CreatedAt) AS DATE) >= DATEADD(day, -(@Days - 1), CAST(DATEADD(MINUTE,330,GETUTCDATE()) AS DATE))
+                GROUP BY c2.AssignedUserId
+            ) msg ON msg.AssignedUserId = u.Id
             WHERE u.IsActive = 1
             GROUP BY u.Id, u.FullName, u.Role
-            ORDER BY ResolvedConversations DESC";
+            ORDER BY UniqueCustomers DESC";
 
         var result = await conn.QueryAsync<AgentStatsDTO>(sql, new { Days = days });
         return result.ToList();
@@ -167,6 +181,8 @@ public class ReportRepository
                 u.Id                                                             AS UserId,
                 u.FullName                                                        AS UserName,
                 u.Role,
+                COUNT(DISTINCT c.CustomerPhone)                                  AS UniqueCustomers,
+                ISNULL(MAX(msg.MessagesSent), 0)                                 AS MessagesSent,
                 COUNT(DISTINCT c.Id)                                              AS ConversationsHandled,
                 -- COUNT(DISTINCT ...) so the Escalations/response-time joins below can't inflate these.
                 COUNT(DISTINCT CASE WHEN c.Status IN ('Open','Escalated')
@@ -228,10 +244,21 @@ public class ReportRepository
                 WHERE fi2.FirstInboundAt BETWEEN @From AND @To AND c3.AssignedUserId > 0
                 GROUP BY c3.AssignedUserId
             ) sla ON sla.AssignedUserId = u.Id
+            LEFT JOIN (
+                -- Outbound messages the agent's side sent in the period. One row per user so it
+                -- doesn't fan out the conversation/escalation counts.
+                SELECT c5.AssignedUserId, COUNT(*) AS MessagesSent
+                FROM Messages m5
+                JOIN Conversations c5 ON c5.Id = m5.ConversationId
+                WHERE m5.Direction = 'outbound'
+                  AND m5.CreatedAt BETWEEN @From AND @To
+                  AND c5.AssignedUserId > 0
+                GROUP BY c5.AssignedUserId
+            ) msg ON msg.AssignedUserId = u.Id
             WHERE u.IsActive = 1
               AND u.Role IN ('CRR', 'Manager', 'HOD')
             GROUP BY u.Id, u.FullName, u.Role
-            ORDER BY ConversationsHandled DESC";
+            ORDER BY UniqueCustomers DESC";
 
         var result = await conn.QueryAsync<AgentPerformanceDTO>(sql, new { From = from, To = to });
         return result.ToList();
@@ -515,16 +542,17 @@ public class ReportRepository
         // plus closed-conversation stats (count + avg resolution time) for when the close workflow is used.
         var res = await conn.QueryFirstOrDefaultAsync<ResolutionReport>(@"
             WITH ConvAgg AS (
-                SELECT c.Id, c.Status, c.CreatedAt, c.ClosedAt,
+                SELECT c.Id, c.Status, c.CreatedAt, c.ClosedAt, c.CustomerPhone,
                     MAX(CASE WHEN m.IsAiGenerated = 0 AND m.Direction = 'outbound' THEN 1 ELSE 0 END) AS HasHuman,
                     MAX(CASE WHEN m.IsAiGenerated = 1 THEN 1 ELSE 0 END) AS HasAi
                 FROM Conversations c
                 LEFT JOIN Messages m ON m.ConversationId = c.Id
                 WHERE c.CreatedAt >= DATEADD(day, -@Days, GETUTCDATE())
-                GROUP BY c.Id, c.Status, c.CreatedAt, c.ClosedAt
+                GROUP BY c.Id, c.Status, c.CreatedAt, c.ClosedAt, c.CustomerPhone
             )
             SELECT
                 COUNT(*)                                                             AS TotalConversations,
+                COUNT(DISTINCT CustomerPhone)                                        AS ActiveCustomers,
                 SUM(CASE WHEN HasHuman = 1 THEN 1 ELSE 0 END)                        AS HumanHandled,
                 SUM(CASE WHEN HasHuman = 0 AND HasAi = 1 THEN 1 ELSE 0 END)          AS AiHandled,
                 SUM(CASE WHEN HasHuman = 0 AND HasAi = 0 THEN 1 ELSE 0 END)          AS NoReply,

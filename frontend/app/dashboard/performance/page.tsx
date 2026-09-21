@@ -34,6 +34,8 @@ interface AgentPerformance {
   id: number;
   name: string;
   role: string;
+  uniqueCustomers: number;
+  messagesSent: number;
   conversationsHandled: number;
   escalationsReceived: number;
   escalationsResolved: number;
@@ -50,7 +52,7 @@ interface AgentPerformance {
 function SkeletonRow() {
   return (
     <tr className="border-b border-gray-50">
-      {[48, 32, 24, 24, 28, 40, 36, 40, 56, 40].map((w, i) => (
+      {[48, 32, 24, 28, 24, 24, 28, 40, 36, 40, 56, 40].map((w, i) => (
         <td key={i} className="py-3.5 px-4">
           <div className="skeleton h-4 rounded" style={{ width: w }} />
         </td>
@@ -139,6 +141,8 @@ export default function PerformancePage() {
         return {
           id: team.id, name: team.name, managerName: team.managerName || '—',
           isActive: team.isActive, memberCount: members.length,
+          uniqueCustomers: teamAgents.reduce((s, a) => s + (a.uniqueCustomers || 0), 0),
+          messagesSent:    teamAgents.reduce((s, a) => s + (a.messagesSent || 0), 0),
           conversationsHandled: teamAgents.reduce((s, a) => s + (a.totalConversations || 0), 0),
           activeConversations:  teamAgents.reduce((s, a) => s + (a.activeConversations  || 0), 0),
           escalationsReceived: escReceived.length,
@@ -192,6 +196,8 @@ export default function PerformancePage() {
         id:                   a.userId,
         name:                 a.userName,
         role:                 a.role,
+        uniqueCustomers:      a.uniqueCustomers ?? 0,
+        messagesSent:         a.messagesSent ?? 0,
         conversationsHandled: a.conversationsHandled,
         escalationsReceived:  a.escalationsReceived,
         escalationsResolved:  a.escalationsResolved,
@@ -201,7 +207,7 @@ export default function PerformancePage() {
         closedInPeriod:       a.closedInPeriod,
         // An agent with no handled conversations and no escalations has no basis for a rate —
         // don't flatter them with a fake 100%/"Excellent".
-        hasActivity:          (a.conversationsHandled ?? 0) > 0 || (a.escalationsReceived ?? 0) > 0,
+        hasActivity:          (a.uniqueCustomers ?? 0) > 0 || (a.conversationsHandled ?? 0) > 0 || (a.escalationsReceived ?? 0) > 0,
         slaMet:               a.slaMet ?? 0,
         slaResponded:         a.slaResponded ?? 0,
         // Null when the agent answered nothing — no basis for an SLA %.
@@ -214,6 +220,8 @@ export default function PerformancePage() {
     }
   };
 
+  const totalCustomers     = agents.reduce((sum, a) => sum + a.uniqueCustomers, 0);
+  const totalMessagesSent  = agents.reduce((sum, a) => sum + a.messagesSent, 0);
   const totalConversations = agents.reduce((sum, a) => sum + a.conversationsHandled, 0);
   const totalEscalations   = agents.reduce((sum, a) => sum + a.escalationsReceived, 0);
   const totalResolved      = agents.reduce((sum, a) => sum + a.escalationsResolved, 0);
@@ -285,9 +293,9 @@ export default function PerformancePage() {
 
   const handleExport = () => {
     const rows = [
-      ['Agent', 'Role', 'Active', 'Handled', 'Closed', 'Escalations Received', 'Escalations Resolved', 'Avg Response (min)', 'SLA Met %', 'Resolution Rate'],
+      ['Agent', 'Role', 'Customers', 'Messages', 'Active', 'Handled', 'Closed', 'Escalations Received', 'Escalations Resolved', 'Avg Response (min)', 'SLA Met %', 'Resolution Rate'],
       ...filteredAgents.map(a => [
-        a.name, a.role, a.activeConversations, a.conversationsHandled,
+        a.name, a.role, a.uniqueCustomers, a.messagesSent, a.activeConversations, a.conversationsHandled,
         a.closedInPeriod, a.escalationsReceived, a.escalationsResolved,
         a.avgResponseTime, a.slaMetPct == null ? 'N/A' : `${a.slaMetPct.toFixed(0)}%`,
         a.escalationsReceived > 0 ? `${a.resolutionRate.toFixed(0)}%` : 'N/A',
@@ -307,11 +315,11 @@ export default function PerformancePage() {
   const periodLabelText = PERIODS.find(p => p.key === selectedPeriod)?.label ?? 'Today';
 
   const perfKpis = (): Kpi[] => [
-    { label: 'Total Agents',          value: String(agents.length) },
-    { label: 'Conversations Handled', value: String(totalConversations) },
-    { label: 'Escalations Resolved',  value: String(totalResolved) },
-    { label: 'Avg Response Time',     value: `${avgTeamResponseTime} min` },
-    { label: 'Resolution Rate',       value: hasTeamEsc ? `${teamResolutionRate}%` : '—' },
+    { label: 'Total Agents',      value: String(agents.length) },
+    { label: 'Customers Served',  value: String(totalCustomers) },
+    { label: 'Messages Sent',     value: String(totalMessagesSent) },
+    { label: 'Avg Response Time', value: `${avgTeamResponseTime} min` },
+    { label: 'Resolution Rate',   value: hasTeamEsc ? `${teamResolutionRate}%` : '—' },
   ];
 
   const perfPies = (): PieBlock[] => {
@@ -337,9 +345,9 @@ export default function PerformancePage() {
 
   const perfTable = (): TableBlock => ({
     title: 'Agent Performance',
-    headers: ['Agent', 'Role', 'Active', 'Handled', 'Closed', 'Esc Recv', 'Esc Resolved', 'Avg Response (m)', 'SLA Met %', 'Resolution %'],
+    headers: ['Agent', 'Role', 'Customers', 'Messages', 'Active', 'Handled', 'Closed', 'Esc Recv', 'Esc Resolved', 'Avg Response (m)', 'SLA Met %', 'Resolution %'],
     rows: filteredAgents.map(a => [
-      a.name, a.role, a.activeConversations, a.conversationsHandled, a.closedInPeriod,
+      a.name, a.role, a.uniqueCustomers, a.messagesSent, a.activeConversations, a.conversationsHandled, a.closedInPeriod,
       a.escalationsReceived, a.escalationsResolved, a.avgResponseTime,
       a.slaMetPct == null ? '—' : `${a.slaMetPct.toFixed(0)}%`,
       a.escalationsReceived > 0 ? `${a.resolutionRate.toFixed(0)}%` : '—',
@@ -399,12 +407,13 @@ export default function PerformancePage() {
         <KPICard index={0} title="Total Agents" value={agents.length}
           icon={Users} iconColor="text-emerald-600" iconBgColor="bg-emerald-100"
           trend={agentsTrend} />
-        <KPICard index={1} title="Conversations Handled" value={totalConversations}
-          icon={MessageSquare} iconColor="text-blue-600" iconBgColor="bg-blue-100"
+        <KPICard index={1} title="Customers Served" value={totalCustomers}
+          icon={Users} iconColor="text-blue-600" iconBgColor="bg-blue-100"
+          subtitleText={`${formatNumber(totalConversations)} conversations`}
           trend={convTrend} />
-        <KPICard index={2} title="Escalations Resolved" value={totalResolved}
-          icon={CheckCircle} iconColor="text-green-600" iconBgColor="bg-green-100"
-          trend={{ value: hasTeamEsc ? `${teamResolutionRate}% rate` : 'no escalations', isPositive: hasTeamEsc ? teamRateOnTarget : true, icon: Target }} />
+        <KPICard index={2} title="Messages Sent" value={totalMessagesSent}
+          icon={MessageSquare} iconColor="text-violet-600" iconBgColor="bg-violet-100"
+          subtitleText="Outbound replies by agents" />
         <KPICard index={3} title="Avg Response Time" value={`${avgTeamResponseTime} min`}
           icon={Clock} iconColor="text-amber-600" iconBgColor="bg-amber-100"
           trend={respTrend} />
@@ -451,7 +460,11 @@ export default function PerformancePage() {
                       </div>
                       <span className="ml-auto text-lg">{rs.label}</span>
                     </div>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="grid grid-cols-3 gap-2 text-sm">
+                      <div className="bg-blue-50 rounded-xl p-2.5 text-center">
+                        <p className="text-gray-400 text-xs mb-0.5">Customers</p>
+                        <p className="font-bold text-blue-700">{agent.uniqueCustomers}</p>
+                      </div>
                       <div className="bg-gray-50 rounded-xl p-2.5 text-center">
                         <p className="text-gray-400 text-xs mb-0.5">SLA Met</p>
                         <p className="font-bold text-green-600">{agent.slaMetPct != null ? `${agent.slaMetPct.toFixed(0)}%` : '—'}</p>
@@ -503,7 +516,7 @@ export default function PerformancePage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    {['Agent','Role','Active','Handled','Closed','Escalations','Avg Response','SLA Met','Resolution Rate','Status'].map((h) => (
+                    {['Agent','Role','Customers','Messages','Active','Handled','Closed','Escalations','Avg Response','SLA Met','Resolution Rate','Status'].map((h) => (
                       <th key={h} className="py-3 px-4 text-left">
                         <div className="skeleton h-3 rounded w-16" />
                       </th>
@@ -545,7 +558,7 @@ export default function PerformancePage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    {['Agent','Role','Active','Handled','Closed','Escalations','Avg Response','SLA Met','Resolution Rate','Status'].map((h) => (
+                    {['Agent','Role','Customers','Messages','Active','Handled','Closed','Escalations','Avg Response','SLA Met','Resolution Rate','Status'].map((h) => (
                       <th key={h} className="py-3 px-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">{h}</th>
                     ))}
                   </tr>
@@ -569,6 +582,12 @@ export default function PerformancePage() {
                           <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full border ${getRoleBadgeColor(agent.role)}`}>
                             {agent.role}
                           </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          <span className="font-bold text-blue-700 text-sm">{agent.uniqueCustomers}</span>
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          <span className="font-semibold text-violet-600 text-sm">{agent.messagesSent}</span>
                         </td>
                         <td className="py-3.5 px-4 text-center">
                           <span className="font-semibold text-blue-600 text-sm">{agent.activeConversations}</span>
@@ -648,18 +667,32 @@ export default function PerformancePage() {
                       </div>
                       <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${perf.bg} ${perf.color}`}>{perf.label}</span>
                     </div>
+                    <div className="grid grid-cols-3 gap-2 text-sm mb-2">
+                      <div className="bg-blue-50 rounded-xl p-2.5 text-center">
+                        <p className="text-gray-400 text-xs mb-0.5">Customers</p>
+                        <p className="font-bold text-blue-700">{agent.uniqueCustomers}</p>
+                      </div>
+                      <div className="bg-violet-50 rounded-xl p-2.5 text-center">
+                        <p className="text-gray-400 text-xs mb-0.5">Messages</p>
+                        <p className="font-bold text-violet-600">{agent.messagesSent}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-xl p-2.5 text-center">
+                        <p className="text-gray-400 text-xs mb-0.5">Convs</p>
+                        <p className="font-semibold text-gray-800">{agent.conversationsHandled}</p>
+                      </div>
+                    </div>
                     <div className="grid grid-cols-3 gap-2 text-sm mb-3">
                       <div className="bg-gray-50 rounded-xl p-2.5 text-center">
                         <p className="text-gray-400 text-xs mb-0.5">Active</p>
                         <p className="font-semibold text-blue-600">{agent.activeConversations}</p>
                       </div>
                       <div className="bg-gray-50 rounded-xl p-2.5 text-center">
-                        <p className="text-gray-400 text-xs mb-0.5">Handled</p>
-                        <p className="font-semibold text-gray-800">{agent.conversationsHandled}</p>
-                      </div>
-                      <div className="bg-gray-50 rounded-xl p-2.5 text-center">
                         <p className="text-gray-400 text-xs mb-0.5">Closed</p>
                         <p className="font-semibold text-green-600">{agent.closedInPeriod}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-xl p-2.5 text-center">
+                        <p className="text-gray-400 text-xs mb-0.5">Esc R/R</p>
+                        <p className="font-semibold text-gray-700"><span className="text-orange-600">{agent.escalationsReceived}</span>/<span className="text-green-600">{agent.escalationsResolved}</span></p>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
@@ -763,7 +796,7 @@ export default function PerformancePage() {
       </div>
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <KPICard index={0} title="Total Teams" value={teams.length} icon={Users} theme="emerald" subtitleText={`${teams.filter(t=>t.isActive).length} active`} />
-        <KPICard index={1} title="Conversations Handled" value={teams.reduce((s,t)=>s+t.conversationsHandled,0)} icon={MessageSquare} theme="blue" subtitleText={selectedPeriod==='today'?'Today':selectedPeriod==='week'?'Last 7 days':'Last 30 days'} />
+        <KPICard index={1} title="Customers Served" value={teams.reduce((s,t)=>s+t.uniqueCustomers,0)} icon={Users} theme="blue" subtitleText={`${formatNumber(teams.reduce((s,t)=>s+t.messagesSent,0))} messages`} />
         <KPICard index={2} title="Escalation Resolution" value={`${tpResolutionRate}%`} icon={Target} theme="green" subtitleText={`${teamTotalResolved} of ${teamTotalEsc} resolved`} />
         <KPICard index={3} title="Total Escalations" value={teamTotalEsc} icon={AlertTriangle} theme="amber" subtitleText={`${teamTotalEsc - teamTotalResolved} pending`} />
       </div>
@@ -776,7 +809,7 @@ export default function PerformancePage() {
             <table className="w-full">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  {['Team','Manager','Members','Active','Handled','Escalations','Resolution','Avg Time','Status'].map(h => (
+                  {['Team','Manager','Members','Customers','Messages','Active','Handled','Escalations','Resolution','Avg Time','Status'].map(h => (
                     <th key={h} className={`py-3 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wide ${h==='Team'||h==='Manager'?'text-left':'text-center'}`}>{h}</th>
                   ))}
                 </tr>
@@ -787,6 +820,8 @@ export default function PerformancePage() {
                     <td className="py-3.5 px-4"><div className="flex items-center gap-2.5"><div className="h-8 w-8 rounded-xl bg-slate-100 flex items-center justify-center flex-shrink-0"><Users className="h-3.5 w-3.5 text-slate-600" /></div><span className="text-sm font-semibold text-gray-900">{team.name}</span></div></td>
                     <td className="py-3.5 px-4 text-sm text-gray-600">{team.managerName}</td>
                     <td className="py-3.5 px-4 text-center text-sm font-semibold text-gray-800">{team.memberCount}</td>
+                    <td className="py-3.5 px-4 text-center text-sm font-bold text-blue-700">{team.uniqueCustomers}</td>
+                    <td className="py-3.5 px-4 text-center text-sm font-semibold text-violet-600">{team.messagesSent}</td>
                     <td className="py-3.5 px-4 text-center text-sm font-bold text-blue-600">{team.activeConversations}</td>
                     <td className="py-3.5 px-4 text-center text-sm font-semibold text-gray-800">{team.conversationsHandled}</td>
                     <td className="py-3.5 px-4 text-center"><span className="text-sm font-medium text-orange-600">{team.escalationsReceived}</span><span className="text-gray-300 mx-1">/</span><span className="text-sm font-medium text-green-600">{team.escalationsResolved}</span></td>
@@ -877,8 +912,12 @@ export default function PerformancePage() {
                   {/* Activity */}
                   <div>
                     <h3 className="text-sm font-semibold text-gray-800 mb-3">Activity · {periodLabel}</h3>
-                    <div className="grid grid-cols-3 gap-2">
-                      <Stat label="Handled" value={String(a.conversationsHandled)} />
+                    <div className="grid grid-cols-3 gap-2 mb-2">
+                      <Stat label="Customers" value={String(a.uniqueCustomers)} color="text-blue-700" />
+                      <Stat label="Messages" value={String(a.messagesSent)} color="text-violet-600" />
+                      <Stat label="Conversations" value={String(a.conversationsHandled)} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
                       <Stat label="Active" value={String(a.activeConversations)} color="text-blue-600" />
                       <Stat label="Closed" value={String(a.closedInPeriod)} color="text-green-600" />
                     </div>

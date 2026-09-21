@@ -371,6 +371,27 @@ public class WebhookController : ControllerBase
             mediaUrl: mediaUrl,
             providerMessageId: providerMessageId);
 
+        // Push a live update so the dashboard reflects this phone/Interakt-web reply immediately
+        // (message appears, conversation bumps, unread clears) rather than only on the next poll.
+        // Best-effort: a notification failure must not fail echo capture.
+        try
+        {
+            var notificationService = sp.GetRequiredService<NotificationService>();
+            var preview = string.IsNullOrWhiteSpace(messageText)
+                ? (mediaUrl != null ? $"[{messageType}]" : "")
+                : messageText;
+            await notificationService.NotifyOutboundMessageAsync(
+                conversation.AssignedUserId,
+                conversation.Id,
+                customerPhone,
+                customerName ?? customerPhone,
+                preview);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Echo captured for conv {Conv} but the live update push failed.", conversation.Id);
+        }
+
         _logger.LogInformation(
             "Echo captured (business→contact) — Conv {Conv}, Contact {Phone}, Type {Type}.",
             conversation.Id, customerPhone, messageType);

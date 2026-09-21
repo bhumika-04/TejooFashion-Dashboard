@@ -21,6 +21,7 @@ public class Conversation
     public DateTime? ClosedAt { get; set; }
     public DateTime? SummaryArchivedAt { get; set; }   // set by retention: messages before this were purged
     public bool TagsLocked { get; set; }               // a CRR edited the tags → auto-tagger frozen
+    public string? Notes { get; set; }                 // agent's private notes for this chat (Interakt-style)
 
     // Navigation properties
     public WhatsAppSession Session { get; set; } = null!;

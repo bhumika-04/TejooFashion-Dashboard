@@ -155,6 +155,32 @@ public class NotificationService
         _logger.LogInformation("Unassigned-message live update only (no stored notification) — conv {Conv}", conversationId);
     }
 
+    // A BUSINESS-SENT (outbound) message that originated OUTSIDE this dashboard — a reply typed on the
+    // WhatsApp mobile app or in the Interakt web console, captured via the webhook echo. Pushes a live
+    // update so the dashboard reflects the reply immediately (message appears, conversation bumps, the
+    // "awaiting reply"/unread flag clears) instead of waiting for the next background poll. This is the
+    // business's own reply, so it is NEVER a stored bell notification — purely an ephemeral live signal.
+    public async Task NotifyOutboundMessageAsync(int? assignedUserId, int conversationId, string customerPhone, string customerName, string messagePreview)
+    {
+        var notification = new NotificationMessage
+        {
+            Type = "outbound_message",
+            Title = "Reply sent",
+            Message = messagePreview,
+            ConversationId = conversationId,
+            CustomerPhone = customerPhone,
+            CustomerName = customerName
+        };
+
+        // Owner's conversation list updates live (ephemeral — no stored notification).
+        if (assignedUserId is > 0)
+            await PushLiveToUserAsync(assignedUserId.Value, notification);
+
+        // Anyone currently viewing this conversation sees the outbound message appear live.
+        await _hubContext.Clients.Group($"conv_{conversationId}").SendAsync("ReceiveNotification", notification);
+        _logger.LogInformation("Outbound-echo live update — conv {Conv} (assigned user {User})", conversationId, assignedUserId);
+    }
+
     // Notify about escalation
     public async Task NotifyEscalationAsync(int userId, int escalationId, int conversationId, string customerPhone, string reason, string priority)
     {

@@ -42,10 +42,11 @@ public class ConversationsController : ControllerBase
         [FromQuery] int? assignedUserId = null,
         [FromQuery] int? sessionId = null,
         [FromQuery] int limit = 100,
-        [FromQuery] int offset = 0)
+        [FromQuery] int offset = 0,
+        [FromQuery] int? tagId = null)
     {
         var conversations = await _conversationService.GetAllConversationsAsync(
-            status, await ResolveVisibleAsync(assignedUserId), sessionId, limit, offset, CallerUserId());
+            status, await ResolveVisibleAsync(assignedUserId), sessionId, limit, offset, CallerUserId(), tagId);
         return Ok(conversations);
     }
 
@@ -320,6 +321,24 @@ public class ConversationsController : ControllerBase
 
         _logger.LogInformation("✓ Conversation closed: Conversation #{ConversationId}", id);
 
+        return Ok(new { success = true });
+    }
+
+    // PUT /api/conversations/{id}/notes — save the agent's private notes for this chat.
+    [HttpPut("{id:int}/notes")]
+    public async Task<IActionResult> UpdateNotes(int id, [FromBody] UpdateNotesRequest request)
+    {
+        await _conversationService.UpdateNotesAsync(id, request.Notes);
+        return Ok(new { success = true });
+    }
+
+    // POST /api/conversations/{id}/resolve-via-call — CRR called the customer directly; record it as a
+    // reply (counts for SLA) and close the chat.
+    [HttpPost("{id:int}/resolve-via-call")]
+    public async Task<IActionResult> ResolveViaCall(int id)
+    {
+        await _conversationService.ResolveViaCallAsync(id);
+        _logger.LogInformation("✓ Conversation #{ConversationId} resolved via call", id);
         return Ok(new { success = true });
     }
 

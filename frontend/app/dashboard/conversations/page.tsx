@@ -16,7 +16,7 @@ import { useToast } from '@/components/ui/toast';
 import { Pagination } from '@/components/ui/pagination';
 import { useSignalR, SignalRNotification } from '@/hooks/useSignalR';
 
-type FilterTab = 'all' | 'escalated' | 'done' | 'ai';
+type FilterTab = 'all' | 'escalated' | 'done';
 
 // ── Media album grouping (WhatsApp-style) ────────────────────────────────────
 const MEDIA_BACKEND_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
@@ -76,6 +76,9 @@ export default function ConversationsPage() {
   const [counts, setCounts] = useState<{ total: number; open: number; escalated: number; closed: number; unread: number } | null>(null);
   const [sessionCounts, setSessionCounts] = useState<Record<number, number>>({});
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
+  // A "view" = show only chats carrying this tag (a conversation tag, or the customer's tag like VIP).
+  const [activeTagId, setActiveTagId] = useState<number | undefined>(undefined);
+  const activeTagIdRef = useRef<number | undefined>(undefined);
   const [activeSessionId, setActiveSessionId] = useState<number | undefined>(undefined);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list'); // mobile stack nav
 
@@ -194,6 +197,10 @@ export default function ConversationsPage() {
   const [summary, setSummary] = useState<any | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [showSummaryPanel, setShowSummaryPanel] = useState(false);
+  const [showNotesPanel, setShowNotesPanel] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [savingNotes, setSavingNotes] = useState(false);
+  const [notesLoading, setNotesLoading] = useState(false);
   const [hasNewMessage, setHasNewMessage] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -267,6 +274,33 @@ export default function ConversationsPage() {
       }
     }
 
+    // A reply sent from the phone / Interakt web console (captured via webhook echo). Reflect it live:
+    // bump the row, update the preview, and CLEAR unread since the business has now replied.
+    if (notification.type === 'outbound_message' && notification.conversationId) {
+      setConversations(prev => {
+        const idx = prev.findIndex(c => c.id === notification.conversationId);
+        if (idx === -1) {
+          if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
+          reloadDebounceRef.current = setTimeout(
+            () => loadConversations(activeSessionIdRef.current, true),
+            800
+          );
+          return prev;
+        }
+        const updated = {
+          ...prev[idx],
+          lastMessagePreview: notification.message,
+          lastMessageAt: notification.timestamp,
+          isUnread: false,
+        };
+        return [updated, ...prev.filter((_, i) => i !== idx)];
+      });
+      if (selectedConvRef.current?.id === notification.conversationId) {
+        shouldScrollRef.current = isAtBottomRef.current;
+        loadMessages(notification.conversationId);
+      }
+    }
+
     if (notification.type === 'escalation' && notification.conversationId) {
       setConversations(prev =>
         prev.map(c => c.id === notification.conversationId ? { ...c, status: 'Escalated' } : c)
@@ -326,7 +360,7 @@ export default function ConversationsPage() {
   }, [showAttachMenu]);
 
   // Server-side status for the active tab so pagination is correct per tab.
-  // 'all' shows every status (sectioned); 'ai' is a client-only concept (no server status).
+  // 'all' shows every status (sectioned).
   const statusForFilter = (f: FilterTab): string | undefined =>
     f === 'escalated' ? 'Escalated' : f === 'done' ? 'Closed' : undefined;
 
@@ -338,7 +372,7 @@ export default function ConversationsPage() {
     setPage(pg);
     try {
       const status = statusForFilter(activeFilterRef.current);
-      const response = await conversationsApi.getAll(status, currentUserId, sessionId, PAGE_SIZE, (pg - 1) * PAGE_SIZE);
+      const response = await conversationsApi.getAll(status, currentUserId, sessionId, PAGE_SIZE, (pg - 1) * PAGE_SIZE, activeTagIdRef.current);
       setConversations(response.data);
       // Real totals (not capped at the 100-row page) for the count badges
       conversationsApi.getCounts(currentUserId, sessionId)
@@ -721,6 +755,43 @@ export default function ConversationsPage() {
     }
   };
 
+  // Notes — fetch the latest saved note when opening the panel (list rows don't carry it).
+  const handleOpenNotes = async () => {
+    if (!selectedConv) return;
+    setShowSummaryPanel(false);
+    setShowNotesPanel(true);
+    setNotesLoading(true);
+    try {
+      const r = await conversationsApi.getById(selectedConv.id);
+      setNotes(r.data?.notes ?? '');
+    } catch { setNotes(''); }
+    finally { setNotesLoading(false); }
+  };
+  const handleSaveNotes = async () => {
+    if (!selectedConv) return;
+    setSavingNotes(true);
+    try {
+      await conversationsApi.updateNotes(selectedConv.id, notes);
+      showToast('Notes saved', 'success');
+    } catch { showToast('Failed to save notes', 'error'); }
+    finally { setSavingNotes(false); }
+  };
+
+  // CRR called the customer directly instead of replying — record as a reply (counts for SLA) and close.
+  const handleResolveViaCall = async () => {
+    if (!selectedConv) return;
+    if (!confirm('Mark this chat as resolved via a phone call? It will be recorded as a reply and closed.')) return;
+    try {
+      await conversationsApi.resolveViaCall(selectedConv.id);
+      showToast('Resolved via call', 'success');
+      setSelectedConv({ ...selectedConv, status: 'Closed' });
+      loadConversations();
+      loadMessages(selectedConv.id);
+    } catch {
+      showToast('Failed to resolve via call', 'error');
+    }
+  };
+
   const handleReopen = async () => {
     if (!selectedConv) return;
     try {
@@ -815,7 +886,6 @@ export default function ConversationsPage() {
     switch (activeFilter) {
       case 'escalated': return conversations.filter(c => c.status === 'Escalated');
       case 'done': return conversations.filter(c => c.status === 'Closed');
-      case 'ai': return conversations.filter(c => c.hasAiMessages);
       default: return conversations;
     }
   };
@@ -901,14 +971,12 @@ export default function ConversationsPage() {
     return () => document.removeEventListener('mousedown', handler);
   }, [bulkMenu]);
 
-  // ── Saved views (session + status tab), persisted per browser ──
-  type SavedView = { name: string; sessionId?: number; filter: FilterTab };
-  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  // ── Tag views: show only chats carrying a chosen tag (a conversation tag, or the
+  //    customer's tag like "VIP"). Choosing a tag reloads the list filtered server-side. ──
   const [showSavedMenu, setShowSavedMenu] = useState(false);
   const savedMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    try { setSavedViews(JSON.parse(localStorage.getItem('conv.savedViews') || '[]')); } catch { /* ignore */ }
     const handler = (e: MouseEvent) => {
       if (savedMenuRef.current && !savedMenuRef.current.contains(e.target as Node)) setShowSavedMenu(false);
     };
@@ -916,28 +984,18 @@ export default function ConversationsPage() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const persistViews = (views: SavedView[]) => {
-    setSavedViews(views);
-    localStorage.setItem('conv.savedViews', JSON.stringify(views));
-  };
-  const saveCurrentView = () => {
-    const sessName = activeSessionId ? (sessions.find((s: any) => s.id === activeSessionId)?.phoneNumber ?? 'session') : 'All sessions';
-    const tabName = activeFilter === 'all' ? 'All' : activeFilter[0].toUpperCase() + activeFilter.slice(1);
-    const name = window.prompt('Name this view:', `${sessName} · ${tabName}`)?.trim();
-    if (!name) return;
-    persistViews([...savedViews.filter(v => v.name !== name), { name, sessionId: activeSessionId, filter: activeFilter }]);
+  // Every tag the user can pick as a view (conversation tags + customer tags like VIP).
+  const viewTags = [...allConvTags, ...allCustomerTags];
+  const activeTag = viewTags.find((t: any) => t.id === activeTagId);
+
+  const applyTagView = (tagId?: number) => {
     setShowSavedMenu(false);
-  };
-  const applyView = (v: SavedView) => {
-    setShowSavedMenu(false);
-    setActiveFilter(v.filter);
-    activeFilterRef.current = v.filter;
-    setActiveSessionId(v.sessionId);
+    setActiveTagId(tagId);
+    activeTagIdRef.current = tagId;
     setSearchQuery(''); setSearchResults(null);
     setSelectedConv(null); setMessages([]);
-    loadConversations(v.sessionId, false, 1);
+    loadConversations(activeSessionId, false, 1);
   };
-  const deleteView = (name: string) => persistViews(savedViews.filter(v => v.name !== name));
 
   return (
     <div className="flex flex-col h-full bg-white overflow-hidden">
@@ -948,7 +1006,6 @@ export default function ConversationsPage() {
             { key: 'all',       label: 'All',       icon: null },
             { key: 'escalated', label: 'Escalated', icon: AlertTriangle },
             { key: 'done',      label: 'Done',       icon: CheckCircle2 },
-            { key: 'ai',        label: 'AI Turn',    icon: null },
           ] as { key: FilterTab; label: string; icon: any }[]).map(({ key, label, icon: Icon }) => (
             <button key={key}
               onClick={() => { setActiveFilter(key); activeFilterRef.current = key; clearSearch(); loadConversations(activeSessionId, false, 1); }}
@@ -981,33 +1038,42 @@ export default function ConversationsPage() {
               })()}
             </button>
           ))}
-          {/* Saved views dropdown */}
+          {/* Views — filter the list to one tag (e.g. VIP customers) */}
           <div className="relative flex-shrink-0 ml-1" ref={savedMenuRef}>
             <button onClick={() => setShowSavedMenu(v => !v)}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 rounded-lg">
-              <Bookmark className="h-3.5 w-3.5" /> Views
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium rounded-lg whitespace-nowrap ${
+                activeTag ? 'bg-emerald-100 text-emerald-700 shadow-sm' : 'text-gray-500 hover:bg-gray-100 hover:text-gray-800'
+              }`}>
+              <Bookmark className="h-3.5 w-3.5" />
+              {activeTag ? activeTag.name : 'Views'}
               <ChevronDown className={`h-3 w-3 transition-transform ${showSavedMenu ? 'rotate-180' : ''}`} />
             </button>
             {showSavedMenu && (
-              <div className="absolute left-0 mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-1">
-                <button onClick={saveCurrentView}
-                  className="w-full text-left px-3 py-2 text-xs font-semibold text-emerald-600 hover:bg-emerald-50 flex items-center gap-1.5">
-                  <Plus className="h-3.5 w-3.5" /> Save current view
+              <div className="absolute left-0 mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-1 max-h-80 overflow-y-auto">
+                <p className="px-3 pt-1.5 pb-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Filter by tag</p>
+                <button onClick={() => applyTagView(undefined)}
+                  className={`w-full text-left px-3 py-2 text-xs hover:bg-gray-50 flex items-center gap-2 ${!activeTagId ? 'font-semibold text-emerald-600' : 'text-gray-700'}`}>
+                  <Layers className="h-3.5 w-3.5" /> All chats
                 </button>
-                {savedViews.length > 0 && <div className="border-t border-gray-100 my-1" />}
-                {savedViews.map(v => (
-                  <div key={v.name} className="flex items-center justify-between px-3 py-1.5 hover:bg-gray-50 group">
-                    <button onClick={() => applyView(v)} className="flex-1 text-left text-xs text-gray-700 truncate">{v.name}</button>
-                    <button onClick={() => deleteView(v.name)} title="Delete view"
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 ml-1 flex-shrink-0">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
+                {viewTags.length > 0 && <div className="border-t border-gray-100 my-1" />}
+                {viewTags.map((t: any) => (
+                  <button key={`${t.type}-${t.id}`} onClick={() => applyTagView(t.id)}
+                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2 ${activeTagId === t.id ? 'font-semibold text-emerald-600 bg-emerald-50' : 'text-gray-700'}`}>
+                    <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: t.color || '#9ca3af' }} />
+                    <span className="flex-1 truncate">{t.name}</span>
+                    <span className="text-[10px] text-gray-400 flex-shrink-0">{t.type === 'customer' ? 'customer' : 'chat'}</span>
+                  </button>
                 ))}
-                {savedViews.length === 0 && <p className="px-3 py-2 text-[11px] text-gray-400">No saved views yet</p>}
+                {viewTags.length === 0 && <p className="px-3 py-2 text-[11px] text-gray-400">No tags yet</p>}
               </div>
             )}
           </div>
+          {activeTag && (
+            <button onClick={() => applyTagView(undefined)} title="Clear tag view"
+              className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-400 hover:text-red-500 flex-shrink-0">
+              <X className="h-3.5 w-3.5" /> Clear
+            </button>
+          )}
         </div>
         <div className="hidden md:flex items-center gap-4 text-sm text-gray-400 flex-shrink-0 pl-3">
           <span className="flex items-center gap-1.5" title={isConnected ? 'Real-time connected' : 'Connecting…'}>
@@ -1490,14 +1556,24 @@ export default function ConversationsPage() {
                             className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                             <Tag className="h-4 w-4 text-emerald-600" /> Tags
                           </button>
-                          <button onClick={() => { setShowKebab(false); setShowSummaryPanel(true); }}
+                          <button onClick={() => { setShowKebab(false); setShowNotesPanel(false); setShowSummaryPanel(true); }}
                             className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                             <BrainCircuit className="h-4 w-4 text-purple-600" /> AI Summary
+                          </button>
+                          <button onClick={() => { setShowKebab(false); handleOpenNotes(); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <FileText className="h-4 w-4 text-blue-600" /> Notes
                           </button>
                           <button onClick={() => { setShowKebab(false); handleExport(); }}
                             className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                             <Download className="h-4 w-4 text-gray-500" /> Export
                           </button>
+                          {!isClosed && (
+                            <button onClick={() => { setShowKebab(false); handleResolveViaCall(); }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 border-t border-gray-100 mt-1 pt-2">
+                              <Phone className="h-4 w-4 text-emerald-600" /> Resolve via call
+                            </button>
+                          )}
                         </div>
                       )}
                       {/* Tag menu (opened from the ⋮ menu) */}
@@ -2095,6 +2171,55 @@ export default function ConversationsPage() {
                             Generate Summary
                           </Button>
                         </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {showNotesPanel && (
+                  <div className="w-72 border-l border-gray-200 bg-gray-50 flex flex-col flex-shrink-0">
+                    <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-white">
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-5 w-5 text-blue-600" />
+                        <h3 className="text-sm font-semibold text-gray-900">Notes</h3>
+                      </div>
+                      <button
+                        onClick={() => setShowNotesPanel(false)}
+                        className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-4 flex flex-col">
+                      <p className="text-xs text-gray-500 mb-2">
+                        Private notes for this chat — visible to the team, never sent to the customer.
+                      </p>
+                      {notesLoading ? (
+                        <div className="flex items-center justify-center py-12">
+                          <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
+                        </div>
+                      ) : (
+                        <>
+                          <textarea
+                            value={notes}
+                            onChange={e => setNotes(e.target.value)}
+                            placeholder="e.g. Customer wants pastel sets under ₹800, called on 9-16, will confirm order tomorrow…"
+                            className="flex-1 min-h-[200px] w-full resize-none rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400"
+                          />
+                          <Button
+                            size="sm"
+                            onClick={handleSaveNotes}
+                            disabled={savingNotes}
+                            className="mt-3 bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+                          >
+                            {savingNotes ? (
+                              <><RefreshCw className="h-4 w-4 animate-spin" /> Saving…</>
+                            ) : (
+                              <><Check className="h-4 w-4" /> Save Notes</>
+                            )}
+                          </Button>
+                        </>
                       )}
                     </div>
                   </div>

@@ -445,6 +445,9 @@ export default function ReportsPage() {
   const overallResolutionRate = totalEscalations > 0
     ? ((totalResolved / totalEscalations) * 100).toFixed(1) : '100';
   const totalMessages = trends.reduce((s, d) => s + (d.total    || 0), 0);
+  // Real (distinct) figures for the period from the resolution report — customers is the headline.
+  const uniqueCustomers = resolution?.activeCustomers ?? 0;
+  const totalConvsReal  = resolution?.totalConversations ?? 0;
   const totalAI       = trends.reduce((s, d) => s + (d.aiHandled || 0), 0);
   const totalHuman    = trends.reduce((s, d) => s + (d.humanHandled || 0), 0);
   const aiRate        = totalMessages > 0 ? (totalAI / totalMessages) * 100 : 0;
@@ -516,7 +519,9 @@ export default function ReportsPage() {
 
   // ── Master report export (CSV / Excel / PDF / Word) ──
   const buildKpis = (): Kpi[] => [
-    { label: 'Total Conversations', value: formatNumber(totalMessages) },
+    { label: 'Unique Customers',    value: formatNumber(uniqueCustomers) },
+    { label: 'Total Messages',      value: formatNumber(totalMessages) },
+    { label: 'Conversations',       value: formatNumber(totalConvsReal) },
     { label: 'AI Handled',          value: `${formatNumber(totalAI)} (${aiRate.toFixed(0)}%)` },
     { label: 'Resolution Rate',     value: `${overallResolutionRate}%` },
     { label: 'Peak Hour',           value: peakHour ? fmtHour(peakHour.hour) : '—' },
@@ -642,21 +647,25 @@ export default function ReportsPage() {
 
       {/* ── Section 1: Summary KPIs ── */}
       <div>
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-          <KPICard index={0} title="Total Conversations" value={totalMessages}
+        <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
+          <KPICard index={0} title="Unique Customers" value={uniqueCustomers}
+            icon={Users} theme="blue"
+            subtitleText={`${formatNumber(totalConvsReal)} conversations`} />
+          <KPICard index={1} title="Total Messages" value={totalMessages}
             icon={MessageSquare} theme="purple"
-            subtitleText={`vs ${formatNumber(compare?.conversationsPrevious ?? 0)} prev ${period}d`}
-            trend={trendBadge(compare?.conversationsCurrent, compare?.conversationsPrevious)} />
-          <KPICard index={1} title="AI Handled" value={totalAI}
+            subtitleText="Inbound + outbound" />
+          <KPICard index={2} title="AI Handled" value={totalAI}
             icon={Zap} theme="green"
             subtitleText={`${aiRate.toFixed(1)}% AI rate`}
             trend={trendBadge(compare?.aiRepliesCurrent, compare?.aiRepliesPrevious)} />
-          <KPICard index={2} title="Resolution Rate" value={`${overallResolutionRate}%`}
+          <KPICard index={3} title="Resolution Rate" value={`${overallResolutionRate}%`}
             icon={Target} theme="emerald"
             subtitleText={`${totalResolved} of ${totalEscalations} resolved`} />
-          <KPICard index={3} title="Peak Hour" value={peakHour ? fmtHour(peakHour.hour) : '—'}
-            icon={Clock} theme="amber"
-            subtitleText={peakHour ? `${peakHour.messageCount} messages` : 'No data yet'} />
+          <div className="col-span-2 xl:col-span-1">
+            <KPICard index={4} title="Peak Hour" value={peakHour ? fmtHour(peakHour.hour) : '—'}
+              icon={Clock} theme="amber"
+              subtitleText={peakHour ? `${peakHour.messageCount} messages` : 'No data yet'} />
+          </div>
         </div>
 
         {/* Search + Export — full-width row below the KPIs */}

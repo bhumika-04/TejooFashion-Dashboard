@@ -105,11 +105,12 @@ export const settingsApi = {
 };
 
 export const conversationsApi = {
-  getAll: (status?: string, assignedUserId?: number, sessionId?: number, limit = 200, offset = 0) => {
+  getAll: (status?: string, assignedUserId?: number, sessionId?: number, limit = 200, offset = 0, tagId?: number) => {
     const params = new URLSearchParams();
     if (status) params.append('status', status);
     if (assignedUserId) params.append('assignedUserId', assignedUserId.toString());
     if (sessionId) params.append('sessionId', sessionId.toString());
+    if (tagId) params.append('tagId', tagId.toString());
     params.append('limit', limit.toString());
     params.append('offset', offset.toString());
     return apiClient.get(`/conversations?${params}`);
@@ -127,6 +128,11 @@ export const conversationsApi = {
 
   sendMessage: (id: number, content: string, messageType: string = 'text', mediaUrl?: string) =>
     apiClient.post(`/conversations/${id}/send-message`, { content, messageType, mediaUrl }),
+
+  // Agent's private per-chat notes.
+  updateNotes: (id: number, notes: string) => apiClient.put(`/conversations/${id}/notes`, { notes }),
+  // CRR called the customer directly → record as a reply (counts for SLA) and close the chat.
+  resolveViaCall: (id: number) => apiClient.post(`/conversations/${id}/resolve-via-call`),
 
   // AI copilot: pending draft for a chat + recording the CRR's action (Sent | Edited | Dismissed).
   getSuggestion: (id: number) => apiClient.get(`/conversations/${id}/suggestion`),
@@ -371,11 +377,12 @@ export const rolePermissionsApi = {
 };
 
 export const customersApi = {
-  getAll: (search?: string, page = 1, pageSize = 50, tagId?: number, convTagId?: number) => {
+  getAll: (search?: string, page = 1, pageSize = 50, tagIds?: number[], convTagIds?: number[], assignedUserId?: number) => {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (search) params.append('search', search);
-    if (tagId) params.append('tagId', String(tagId));
-    if (convTagId) params.append('convTagId', String(convTagId));
+    (tagIds ?? []).forEach(id => params.append('tagIds', String(id)));
+    (convTagIds ?? []).forEach(id => params.append('convTagIds', String(id)));
+    if (assignedUserId) params.append('assignedUserId', String(assignedUserId));
     return apiClient.get(`/customers?${params}`);
   },
   getById: (id: number) => apiClient.get(`/customers/${id}`),

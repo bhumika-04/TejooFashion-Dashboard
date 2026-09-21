@@ -42,16 +42,21 @@ public class CustomersController : ControllerBase
         return Ok(stats);
     }
 
-    // GET /api/customers?search=&page=1&pageSize=20&tagId=
+    // GET /api/customers?search=&page=1&pageSize=20&tagIds=1&tagIds=2&convTagIds=3&assignedUserId=
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] string? search,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
-        [FromQuery] int? tagId = null,
-        [FromQuery] int? convTagId = null)
+        [FromQuery] int[]? tagIds = null,
+        [FromQuery] int[]? convTagIds = null,
+        [FromQuery] int? assignedUserId = null)
     {
-        var (customers, total) = await _customers.GetPagedAsync(search, page, pageSize, tagId, convTagId, ScopeUserId());
+        // Scoped roles (CRR/AGENT) are always locked to their own customers; privileged roles
+        // may optionally narrow to one CRR via ?assignedUserId to review that agent's tagging.
+        var scope = ScopeUserId();
+        var effectiveUser = scope ?? assignedUserId;
+        var (customers, total) = await _customers.GetPagedAsync(search, page, pageSize, tagIds, convTagIds, effectiveUser);
         return Ok(new { customers, total, page, pageSize });
     }
 
