@@ -149,6 +149,7 @@ builder.Services.AddHostedService<CatalogSendService>();
 builder.Services.AddHostedService<ConversationRetentionService>();
 
 // Register AI Services
+builder.Services.AddSingleton<TejooWhatsApp.AI.AiHealthState>();
 builder.Services.AddScoped<OpenAiClient>();
 builder.Services.AddSingleton<PromptLoader>(); // Singleton so prompt cache persists across requests
 builder.Services.AddScoped<AiRouterService>();

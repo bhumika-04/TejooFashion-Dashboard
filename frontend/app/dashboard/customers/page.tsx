@@ -22,6 +22,7 @@ export default function CustomersPage() {
   const [filterConvTagIds, setFilterConvTagIds] = useState<number[]>([]);
   const [filterUserId, setFilterUserId] = useState<number | null>(null);
   const [crrUsers, setCrrUsers] = useState<any[]>([]);
+  const [crrSearch, setCrrSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [conversations, setConversations] = useState<any[]>([]);
@@ -331,19 +332,29 @@ export default function CustomersPage() {
                 <ChevronDown className="h-3.5 w-3.5" />
               </button>
               {showFilterMenu && (
-                <div className="absolute right-0 mt-1 w-64 max-h-[70vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3 space-y-3">
+                <div className="absolute right-0 mt-1 w-72 max-h-[75vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3 space-y-3">
                   {activeFilterCount > 0 && (
                     <button onClick={clearAllFilters}
                       className="w-full text-[11px] font-semibold text-gray-500 hover:text-red-600 border border-gray-200 hover:border-red-200 rounded-lg py-1.5 flex items-center justify-center gap-1">
                       <X className="h-3 w-3" /> Clear all filters
                     </button>
                   )}
-                  {/* CRR / agent — admins only */}
+                  {/* CRR / agent — admins only. Bounded + searchable so a long roster doesn't bury the tag filters. */}
                   {isPrivileged && crrUsers.length > 0 && (
                     <div>
                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-2">CRR / Agent</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {crrUsers.map(u => {
+                      {crrUsers.length > 8 && (
+                        <input
+                          value={crrSearch}
+                          onChange={e => setCrrSearch(e.target.value)}
+                          placeholder="Search agent…"
+                          className="w-full mb-2 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                        />
+                      )}
+                      <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto pr-1">
+                        {crrUsers
+                          .filter(u => !crrSearch || (u.fullName ?? u.name ?? u.email ?? '').toLowerCase().includes(crrSearch.toLowerCase()))
+                          .map(u => {
                           const active = filterUserId === u.id;
                           return (
                             <button key={u.id} onClick={() => handleUserFilter(u.id)}

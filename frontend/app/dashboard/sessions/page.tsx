@@ -10,7 +10,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { KPICard } from '@/components/ui/kpi-card';
 import { FAB } from '@/components/ui/fab';
-import { parseUTCDate } from '@/lib/utils';
+import { parseUTCDate, formatNumber } from '@/lib/utils';
 
 export default function SessionsPage() {
   const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } })();
@@ -154,6 +154,9 @@ export default function SessionsPage() {
   const activeSessions = sessions.filter(s => (s.messagesToday || 0) > 0).length;
   const totalInboundToday = sessions.reduce((sum, s) => sum + (s.messagesToday || 0), 0);
   const totalOutboundToday = sessions.reduce((sum, s) => sum + (s.outboundToday || 0), 0);
+  // Unique customers who messaged / were messaged today (per-session counts summed).
+  const totalInboundCustomers = sessions.reduce((sum, s) => sum + (s.inboundCustomersToday || 0), 0);
+  const totalOutboundCustomers = sessions.reduce((sum, s) => sum + (s.outboundCustomersToday || 0), 0);
 
   // Real avg first-response time (customer inbound → first recorded reply), last 7 days.
   const slaOverall = respSla?.overall;
@@ -242,14 +245,14 @@ export default function SessionsPage() {
           value={totalInboundToday}
           icon={MessageSquare}
           theme="amber"
-          subtitleText="Customer messages"
+          subtitleText={`messages · ${formatNumber(totalInboundCustomers)} customers`}
         />
         <KPICard index={3}
           title="Outbound Today"
           value={totalOutboundToday}
           icon={Send}
           theme="cyan"
-          subtitleText="Sent messages"
+          subtitleText={`messages · ${formatNumber(totalOutboundCustomers)} customers`}
         />
         <KPICard index={4}
           title="Avg First Response"

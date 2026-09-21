@@ -10,8 +10,9 @@ public class OpenAiClient
     private readonly string _model;
     private readonly string _baseUrl;
     private readonly double _temperature;
+    private readonly AiHealthState _health;
 
-    public OpenAiClient(IConfiguration configuration, IHttpClientFactory httpClientFactory)
+    public OpenAiClient(IConfiguration configuration, IHttpClientFactory httpClientFactory, AiHealthState health)
     {
         _httpClient = httpClientFactory.CreateClient();
         _apiKey = configuration["OpenAI:ApiKey"] ?? throw new Exception("OpenAI API Key not configured");
@@ -19,6 +20,26 @@ public class OpenAiClient
         _baseUrl = configuration["ExternalApis:OpenAiBaseUrl"] ?? "https://api.openai.com";
         // Lower temperature = more accurate, consistent business replies (was 0.7). Tunable via config.
         _temperature = double.TryParse(configuration["OpenAI:Temperature"], out var temp) ? temp : 0.4;
+        _health = health;
+    }
+
+    /// <summary>
+    /// Flip the shared AI-health flag based on a response: an out-of-credits error (429 with
+    /// insufficient_quota / credit_balance_exhausted) raises the warning; any success clears it.
+    /// </summary>
+    private void TrackHealth(System.Net.HttpStatusCode status, string body)
+    {
+        if (status == System.Net.HttpStatusCode.TooManyRequests &&
+            (body.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase) ||
+             body.Contains("credit_balance_exhausted", StringComparison.OrdinalIgnoreCase) ||
+             body.Contains("no credits remaining", StringComparison.OrdinalIgnoreCase)))
+        {
+            _health.ReportQuotaExhausted("OpenAI account is out of credits — top up at platform.openai.com to restore AI features.");
+        }
+        else if ((int)status >= 200 && (int)status < 300)
+        {
+            _health.ReportSuccess();
+        }
     }
 
     public async Task<string?> GetChatCompletionAsync(string systemPrompt, string userMessage, List<ChatMessage>? conversationHistory = null)
@@ -58,6 +79,7 @@ public class OpenAiClient
             var response = await _httpClient.SendAsync(request, cts.Token);
             var responseContent = await response.Content.ReadAsStringAsync();
 
+            TrackHealth(response.StatusCode, responseContent);
             if (!response.IsSuccessStatusCode)
             {
                 throw new Exception($"OpenAI API error: {response.StatusCode} - {responseContent}");
@@ -101,6 +123,7 @@ public class OpenAiClient
         {
             var response = await _httpClient.SendAsync(request, cts.Token);
             var body = await response.Content.ReadAsStringAsync();
+            TrackHealth(response.StatusCode, body);
             if (!response.IsSuccessStatusCode)
                 throw new Exception($"Whisper API error: {response.StatusCode} - {body}");
             return JsonConvert.DeserializeObject<WhisperResponse>(body)?.Text?.Trim();

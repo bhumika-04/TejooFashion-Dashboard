@@ -52,6 +52,7 @@ export default function GalleryPage() {
   const [formName, setFormName] = useState('');
   const [formInfo, setFormInfo] = useState('');
   const [formSaving, setFormSaving] = useState(false);
+  const [attachSelectionOnCreate, setAttachSelectionOnCreate] = useState(false); // create-new-catalog from the "add to catalog" picker → attach the selected images
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
   const load = async (p = page, f: Filters = { direction, sessionId, fromDate, toDate }) => {
@@ -136,7 +137,7 @@ export default function GalleryPage() {
   };
 
   // ── Catalog CRUD ──
-  const openCreate = () => { setFormEditing(null); setFormName(''); setFormInfo(''); setFormOpen(true); };
+  const openCreate = (attachSelection = false) => { setAttachSelectionOnCreate(attachSelection); setFormEditing(null); setFormName(''); setFormInfo(''); setFormOpen(true); };
   const openEdit = (c: any) => { setFormEditing(c); setFormName(c.name); setFormInfo(c.info ?? ''); setFormOpen(true); };
   const saveForm = async () => {
     if (!formName.trim()) { showToast('Enter a catalog name', 'error'); return; }
@@ -147,9 +148,20 @@ export default function GalleryPage() {
         showToast('Catalog updated', 'success');
         if (detail?.id === formEditing.id) setDetail((d: any) => ({ ...d, name: formName.trim(), info: formInfo.trim() }));
       } else {
-        await catalogsApi.create(formName.trim(), formInfo.trim() || undefined);
-        showToast('Catalog created', 'success');
+        const res = await catalogsApi.create(formName.trim(), formInfo.trim() || undefined);
+        const newId = res.data?.id;
+        // Created from the "add to catalog" picker → attach the images that were selected.
+        if (attachSelectionOnCreate && newId && selected.size > 0) {
+          const payload = [...selected.entries()].map(([id, v]) => ({ mediaUrl: v.mediaUrl, sourceMessageId: id }));
+          const addRes = await catalogsApi.addItems(newId, payload);
+          showToast(`Catalog created · ${addRes.data.added} image${addRes.data.added === 1 ? '' : 's'} added`, 'success');
+          exitSelect();
+          load(page); // refresh image badges
+        } else {
+          showToast('Catalog created', 'success');
+        }
       }
+      setAttachSelectionOnCreate(false);
       setFormOpen(false); loadCatalogs();
     } catch { showToast('Failed to save catalog', 'error'); }
     finally { setFormSaving(false); }
@@ -348,7 +360,7 @@ export default function GalleryPage() {
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm text-gray-500">Group product images into catalogs you can send to customers.</p>
             {canManage && (
-              <button onClick={openCreate}
+              <button onClick={() => openCreate()}
                 className="flex items-center gap-1.5 text-sm font-semibold text-emerald-700 bg-emerald-100 rounded-lg px-3.5 py-2 hover:bg-emerald-200">
                 <Plus className="h-4 w-4" /> New Catalog
               </button>
@@ -427,7 +439,7 @@ export default function GalleryPage() {
             </div>
             <div className="p-4 max-h-[50vh] overflow-y-auto space-y-1.5">
               {canManage && (
-                <button onClick={() => { setPickerOpen(false); openCreate(); }}
+                <button onClick={() => { setPickerOpen(false); openCreate(true); }}
                   className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-dashed border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold">
                   <Plus className="h-4 w-4" /> Create new catalog
                 </button>

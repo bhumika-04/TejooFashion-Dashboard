@@ -15,11 +15,25 @@ public class SystemController : ControllerBase
 {
     private readonly MessageQueueService _queue;
     private readonly IConfiguration _config;
+    private readonly TejooWhatsApp.AI.AiHealthState _aiHealth;
 
-    public SystemController(MessageQueueService queue, IConfiguration config)
+    public SystemController(MessageQueueService queue, IConfiguration config, TejooWhatsApp.AI.AiHealthState aiHealth)
     {
         _queue = queue;
         _config = config;
+        _aiHealth = aiHealth;
+    }
+
+    // GET /api/system/ai-status — is the OpenAI account out of credits? Drives the dashboard warning banner.
+    [HttpGet("ai-status")]
+    public IActionResult GetAiStatus()
+    {
+        return Ok(new
+        {
+            creditsExhausted = _aiHealth.CreditsExhausted,
+            since = _aiHealth.SinceUtc,
+            message = _aiHealth.Message,
+        });
     }
 
     // GET /api/system/queue-health

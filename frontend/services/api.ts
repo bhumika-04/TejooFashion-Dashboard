@@ -450,6 +450,7 @@ export const searchApi = {
 
 export const systemApi = {
   getQueueHealth: () => apiClient.get('/system/queue-health'),
+  getAiStatus: () => apiClient.get('/system/ai-status'),
   retryJob:   (id: number) => apiClient.post(`/system/queue/${id}/retry`),
   discardJob: (id: number) => apiClient.post(`/system/queue/${id}/discard`),
 };
