@@ -96,8 +96,8 @@ export default function DashboardPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8 bg-beige min-h-screen">
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6 lg:mb-8 items-stretch">
+      {/* KPI Cards — CRRs see a personal, 4-KPI view (no company-wide "Active Users") */}
+      <div className={`grid grid-cols-2 gap-4 mb-6 lg:mb-8 items-stretch ${isCRR ? 'md:grid-cols-2 xl:grid-cols-4' : 'md:grid-cols-3 xl:grid-cols-5'}`}>
         <KPICard index={0}
           title="Total Conversations"
           value={stats?.totalConversations || 0}
@@ -126,15 +126,17 @@ export default function DashboardPage() {
           theme="green"
           subtitleText="AI-sent share of replies"
         />
-        <KPICard index={4}
-          title="Active Users"
-          value={stats?.activeUsers || 0}
-          icon={Users}
-          theme="purple"
-          subtitleText="Agents online"
-          // Fill the trailing gap: full row on 2-col mobile, spans the last 2 of 3 on md, single on xl(5-col)
-          className="col-span-2 xl:col-span-1"
-        />
+        {!isCRR && (
+          <KPICard index={4}
+            title="Active Users"
+            value={stats?.activeUsers || 0}
+            icon={Users}
+            theme="purple"
+            subtitleText="Agents online"
+            // Fill the trailing gap: full row on 2-col mobile, spans the last 2 of 3 on md, single on xl(5-col)
+            className="col-span-2 xl:col-span-1"
+          />
+        )}
       </div>
 
       {/* CRR: my open chats overdue for a reply past the session SLA */}

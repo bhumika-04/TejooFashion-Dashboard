@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 using TejooWhatsApp.Repositories;
 
 namespace TejooWhatsApp.Controllers;
@@ -17,12 +19,24 @@ public class ReportsController : ControllerBase
         _aiSuggestions = aiSuggestions;
     }
 
+    // CRR/agents only ever see their OWN data (personal Overview). Resolved from the JWT so it
+    // can't be bypassed by a client-supplied param. Null = privileged role (company-wide view).
+    private int? ScopeUserId()
+    {
+        var role = User.FindFirst(ClaimTypes.Role)?.Value ?? "";
+        if (role is not ("CRR" or "AGENT")) return null;
+
+        var idStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                 ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        return int.TryParse(idStr, out var id) ? id : -1; // -1 = matches nothing, fail closed
+    }
+
     // from/to are IST calendar dates (yyyy-MM-dd); omitted → today. Scopes the historical
     // dashboard metrics (conversations, messages, AI rate) to the selected range.
     [HttpGet("dashboard")]
     public async Task<IActionResult> GetDashboardStats([FromQuery] string? from = null, [FromQuery] string? to = null)
     {
-        var stats = await _reportRepo.GetDashboardStatsAsync(from, to);
+        var stats = await _reportRepo.GetDashboardStatsAsync(from, to, ScopeUserId());
         return Ok(stats);
     }
 
@@ -36,7 +50,7 @@ public class ReportsController : ControllerBase
     [HttpGet("session-activity")]
     public async Task<IActionResult> GetSessionActivity()
     {
-        var activity = await _reportRepo.GetSessionActivityAsync();
+        var activity = await _reportRepo.GetSessionActivityAsync(ScopeUserId());
         return Ok(activity);
     }
 

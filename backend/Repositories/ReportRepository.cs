@@ -12,7 +12,10 @@ public class ReportRepository
         _db = db;
     }
 
-    public async Task<DashboardStatsDTO> GetDashboardStatsAsync(string? fromDate = null, string? toDate = null)
+    // assignedUserId (optional) scopes every metric to a single agent's own data — used to give
+    // CRRs a personal Overview (their conversations, their customers, their escalations, their session).
+    // Null = company-wide (admins/managers).
+    public async Task<DashboardStatsDTO> GetDashboardStatsAsync(string? fromDate = null, string? toDate = null, int? assignedUserId = null)
     {
         using var conn = _db.CreateConnection();
 
@@ -25,9 +28,10 @@ public class ReportRepository
         var istToday = DateTime.UtcNow.AddMinutes(330).ToString("yyyy-MM-dd");
         var from = string.IsNullOrWhiteSpace(fromDate) ? istToday : fromDate;
         var to   = string.IsNullOrWhiteSpace(toDate)   ? istToday : toDate;
-        var range = new { From = from, To = to };
+        var range = new { From = from, To = to, Uid = assignedUserId };
 
-        // Conversation stats — scoped to conversations CREATED within the selected window (IST).
+        // Conversation stats — scoped to conversations CREATED within the selected window (IST),
+        // and (when @Uid is set) only those assigned to that agent.
         var convStats = await conn.QueryFirstOrDefaultAsync<dynamic>(@"
             SELECT
                 COUNT(*) as TotalConversations,
@@ -36,7 +40,8 @@ public class ReportRepository
                 SUM(CASE WHEN Status = 'Closed' THEN 1 ELSE 0 END) as ClosedConversations,
                 SUM(CASE WHEN Status = 'Escalated' THEN 1 ELSE 0 END) as EscalatedConversations
             FROM Conversations
-            WHERE CAST(DATEADD(MINUTE, 330, CreatedAt) AS DATE) BETWEEN @From AND @To", range);
+            WHERE CAST(DATEADD(MINUTE, 330, CreatedAt) AS DATE) BETWEEN @From AND @To
+              AND (@Uid IS NULL OR AssignedUserId = @Uid)", range);
 
         stats.TotalConversations = convStats?.TotalConversations ?? 0;
         stats.TotalCustomers = convStats?.TotalCustomers ?? 0;
@@ -49,33 +54,38 @@ public class ReportRepository
         var msgStats = await conn.QueryFirstOrDefaultAsync<dynamic>(@"
             SELECT
                 COUNT(*) as TodayMessages,
-                SUM(CASE WHEN Direction = 'inbound' THEN 1 ELSE 0 END) as TodayInbound,
-                SUM(CASE WHEN Direction = 'outbound' THEN 1 ELSE 0 END) as TodayOutbound,
-                SUM(CASE WHEN IsAiGenerated = 1 THEN 1 ELSE 0 END) as TodayAiReplies
-            FROM Messages
-            WHERE CAST(DATEADD(MINUTE, 330, CreatedAt) AS DATE) BETWEEN @From AND @To", range);
+                SUM(CASE WHEN m.Direction = 'inbound' THEN 1 ELSE 0 END) as TodayInbound,
+                SUM(CASE WHEN m.Direction = 'outbound' THEN 1 ELSE 0 END) as TodayOutbound,
+                SUM(CASE WHEN m.IsAiGenerated = 1 THEN 1 ELSE 0 END) as TodayAiReplies
+            FROM Messages m
+            WHERE CAST(DATEADD(MINUTE, 330, m.CreatedAt) AS DATE) BETWEEN @From AND @To
+              AND (@Uid IS NULL OR EXISTS (
+                    SELECT 1 FROM Conversations c
+                    WHERE c.Id = m.ConversationId AND c.AssignedUserId = @Uid))", range);
 
         stats.TodayMessages = msgStats?.TodayMessages ?? 0;
         stats.TodayInbound = msgStats?.TodayInbound ?? 0;
         stats.TodayOutbound = msgStats?.TodayOutbound ?? 0;
         stats.TodayAiReplies = msgStats?.TodayAiReplies ?? 0;
 
-        // Session stats
+        // Session stats — a CRR only counts the session(s) assigned to them.
         var sessionStats = await conn.QueryFirstOrDefaultAsync<dynamic>(@"
             SELECT
                 COUNT(*) as TotalSessions,
                 SUM(CASE WHEN IsActive = 1 AND IsConnected = 1 THEN 1 ELSE 0 END) as ActiveSessions
-            FROM WhatsAppSessions");
+            FROM WhatsAppSessions
+            WHERE (@Uid IS NULL OR AssignedUserId = @Uid)", new { Uid = assignedUserId });
 
         stats.TotalSessions = sessionStats?.TotalSessions ?? 0;
         stats.ActiveSessions = sessionStats?.ActiveSessions ?? 0;
 
-        // Escalation stats
+        // Escalation stats — a CRR only sees escalations routed to them.
         var escalStats = await conn.QueryFirstOrDefaultAsync<dynamic>(@"
             SELECT
                 SUM(CASE WHEN Status = 'Pending' THEN 1 ELSE 0 END) as PendingEscalations,
                 SUM(CASE WHEN Status = 'Resolved' THEN 1 ELSE 0 END) as ResolvedEscalations
-            FROM Escalations");
+            FROM Escalations
+            WHERE (@Uid IS NULL OR EscalatedToUserId = @Uid)", new { Uid = assignedUserId });
 
         stats.PendingEscalations = escalStats?.PendingEscalations ?? 0;
         stats.ResolvedEscalations = escalStats?.ResolvedEscalations ?? 0;
@@ -599,11 +609,12 @@ public class ReportRepository
         return res;
     }
 
-    public async Task<List<SessionActivityDTO>> GetSessionActivityAsync()
+    public async Task<List<SessionActivityDTO>> GetSessionActivityAsync(int? assignedUserId = null)
     {
         using var conn = _db.CreateConnection();
         // MessageCount = real messages TODAY (IST) for this session, computed live — not the
         // cumulative-never-resets WhatsAppSessions.MessagesToday counter.
+        // @Uid scopes to the CRR's own session(s) for a personal Overview.
         var sql = @"
             SELECT
                 ws.PhoneNumber,
@@ -618,10 +629,11 @@ public class ReportRepository
             FROM WhatsAppSessions ws
             LEFT JOIN Conversations c ON ws.Id = c.SessionId
             WHERE ws.IsActive = 1
+              AND (@Uid IS NULL OR ws.AssignedUserId = @Uid)
             GROUP BY ws.Id, ws.PhoneNumber, ws.DisplayName, ws.LastActiveAt
             ORDER BY ws.LastActiveAt DESC";
 
-        var result = await conn.QueryAsync<SessionActivityDTO>(sql);
+        var result = await conn.QueryAsync<SessionActivityDTO>(sql, new { Uid = assignedUserId });
         return result.ToList();
     }
 }
