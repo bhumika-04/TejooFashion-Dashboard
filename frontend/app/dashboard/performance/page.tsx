@@ -25,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import { KPICard } from '@/components/ui/kpi-card';
-import { formatNumber } from '@/lib/utils';
+import { formatNumber, parseUTCDate } from '@/lib/utils';
 import { DASHBOARD_RANGE_EVENT, DashboardRangeDetail, rangeToPerfPeriod } from '@/lib/dateRange';
 import { exportExcel, exportPdf, exportDocx } from '@/lib/reportExport';
 import type { TableBlock, PieBlock, Kpi } from '@/lib/reportExport';
@@ -47,6 +47,14 @@ interface AgentPerformance {
   slaMet: number;
   slaResponded: number;
   slaMetPct: number | null;   // % of responded conversations answered within their number's SLA
+}
+
+// Minutes → "45m" / "3h 20m" / "2d 4h".
+function fmtDurationMins(mins: number): string {
+  const m = Math.round(mins || 0);
+  if (m < 60) return `${m}m`;
+  if (m < 1440) return `${Math.floor(m / 60)}h ${m % 60}m`;
+  return `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
 }
 
 function SkeletonRow() {
@@ -123,7 +131,7 @@ export default function PerformancePage() {
       const agentStats: any[] = agentStatsRes.data ?? [];
       const escFrom = new Date(); escFrom.setHours(0, 0, 0, 0); escFrom.setDate(escFrom.getDate() - (days - 1));
       const escalations: any[] = ((escRes.data as any[]) ?? []).filter((e: any) => {
-        const dt = e.escalatedAt ? new Date(e.escalatedAt) : null;
+        const dt = parseUTCDate(e.escalatedAt);
         return dt ? dt >= escFrom : true;
       });
       const memberResults = await Promise.all(
@@ -148,7 +156,8 @@ export default function PerformancePage() {
           escalationsReceived: escReceived.length,
           escalationsResolved: escResolved.length,
           resolutionRate: escReceived.length > 0 ? (escResolved.length / escReceived.length) * 100 : 100,
-          avgResponseTime: teamAgents.length ? Math.round(teamAgents.reduce((s, a) => s + (a.avgResolutionMinutes || 0), 0) / teamAgents.length / 60) : 0,
+          // Average time from a chat opening to it being closed (minutes) — resolution, not first response.
+          avgResolutionMinutes: teamAgents.length ? Math.round(teamAgents.reduce((s, a) => s + (a.avgResolutionMinutes || 0), 0) / teamAgents.length) : 0,
         };
       }));
     } catch { /* silently ignore */ }
@@ -809,7 +818,7 @@ export default function PerformancePage() {
             <table className="w-full">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  {['Team','Manager','Members','Customers','Messages','Active','Handled','Escalations','Resolution','Avg Time','Status'].map(h => (
+                  {['Team','Manager','Members','Customers','Messages','Active','Handled','Escalations','Resolution','Avg Resolution','Status'].map(h => (
                     <th key={h} className={`py-3 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wide ${h==='Team'||h==='Manager'?'text-left':'text-center'}`}>{h}</th>
                   ))}
                 </tr>
@@ -826,7 +835,7 @@ export default function PerformancePage() {
                     <td className="py-3.5 px-4 text-center text-sm font-semibold text-gray-800">{team.conversationsHandled}</td>
                     <td className="py-3.5 px-4 text-center"><span className="text-sm font-medium text-orange-600">{team.escalationsReceived}</span><span className="text-gray-300 mx-1">/</span><span className="text-sm font-medium text-green-600">{team.escalationsResolved}</span></td>
                     <td className="py-3.5 px-4"><div className="flex items-center gap-2"><div className="w-14 h-1.5 bg-gray-100 rounded-full overflow-hidden"><div className={`h-full rounded-full ${resBar(team.resolutionRate)}`} style={{width:`${team.resolutionRate}%`}} /></div><span className={`text-sm font-semibold ${resColor(team.resolutionRate)}`}>{team.resolutionRate.toFixed(0)}%</span></div></td>
-                    <td className="py-3.5 px-4 text-center"><div className="flex items-center justify-center gap-1 text-sm text-gray-600"><Clock className="h-3.5 w-3.5 text-gray-400" />{team.avgResponseTime}m</div></td>
+                    <td className="py-3.5 px-4 text-center"><div className="flex items-center justify-center gap-1 text-sm text-gray-600"><Clock className="h-3.5 w-3.5 text-gray-400" />{fmtDurationMins(team.avgResolutionMinutes)}</div></td>
                     <td className="py-3.5 px-4 text-center"><span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full border ${team.isActive?'bg-green-50 text-green-700 border-green-200':'bg-gray-100 text-gray-500 border-gray-200'}`}><span className={`h-1.5 w-1.5 rounded-full ${team.isActive?'bg-green-500':'bg-gray-400'}`} />{team.isActive?'Active':'Inactive'}</span></td>
                   </tr>
                 ))}

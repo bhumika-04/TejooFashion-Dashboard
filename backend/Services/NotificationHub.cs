@@ -4,14 +4,23 @@ using TejooWhatsApp.Repositories;
 
 namespace TejooWhatsApp.Services;
 
+// Every group a client can join carries customer messages, so membership is checked against the
+// caller's JWT: only your own user group, conversations you may open, and teams you belong to.
+[Microsoft.AspNetCore.Authorization.Authorize]
 public class NotificationHub : Hub
 {
     private readonly ILogger<NotificationHub> _logger;
+    private readonly TejooWhatsApp.Security.VisibilityService _visibility;
+    private readonly ITeamMemberRepository _teamMembers;
 
-    public NotificationHub(ILogger<NotificationHub> logger)
+    public NotificationHub(ILogger<NotificationHub> logger, TejooWhatsApp.Security.VisibilityService visibility, ITeamMemberRepository teamMembers)
     {
         _logger = logger;
+        _visibility = visibility;
+        _teamMembers = teamMembers;
     }
+
+    private int? CallerId => Context.User is { } u ? TejooWhatsApp.Security.PageAccessService.UserIdOf(u) : null;
 
     public override async Task OnConnectedAsync()
     {
@@ -25,23 +34,29 @@ public class NotificationHub : Hub
         await base.OnDisconnectedAsync(exception);
     }
 
-    // Join user-specific group for targeted notifications
+    // Join your own notification group. The userId argument is kept for client compatibility but the
+    // group is always the caller's own (from the JWT) — you can't subscribe to someone else's.
     public async Task JoinUserGroup(int userId)
     {
-        await Groups.AddToGroupAsync(Context.ConnectionId, $"user_{userId}");
-        _logger.LogInformation("✓ User {UserId} joined notification group", userId);
+        if (CallerId is not { } uid) return;
+        await Groups.AddToGroupAsync(Context.ConnectionId, $"user_{uid}");
+        _logger.LogInformation("✓ User {UserId} joined notification group", uid);
     }
 
-    // Join team group for team-wide notifications
+    // Join team group for team-wide notifications — members only.
     public async Task JoinTeamGroup(int teamId)
     {
+        if (CallerId is not { } uid) return;
+        var memberships = await _teamMembers.GetMembershipsByUserAsync(uid);
+        if (!memberships.Any(m => m.TeamId == teamId)) return;
         await Groups.AddToGroupAsync(Context.ConnectionId, $"team_{teamId}");
         _logger.LogInformation("✓ User joined team {TeamId} notification group", teamId);
     }
 
-    // Join a specific conversation — anyone viewing this conversation receives its messages in real-time
+    // Join a specific conversation (live messages while it's open) — only one you may open.
     public async Task JoinConversation(int conversationId)
     {
+        if (Context.User == null || !await _visibility.CanAccessConversationAsync(Context.User, conversationId)) return;
         await Groups.AddToGroupAsync(Context.ConnectionId, $"conv_{conversationId}");
     }
 
@@ -53,7 +68,8 @@ public class NotificationHub : Hub
     // Leave groups on logout
     public async Task LeaveUserGroup(int userId)
     {
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"user_{userId}");
+        if (CallerId is not { } uid) return;
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"user_{uid}");
     }
 
     public async Task LeaveTeamGroup(int teamId)

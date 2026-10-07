@@ -130,6 +130,10 @@ builder.Services.AddScoped<CustomerRepository>();
 builder.Services.AddScoped<TagRepository>();
 builder.Services.AddScoped<AuditLogRepository>();
 
+// Access control shared by controllers and the real-time hub
+builder.Services.AddSingleton<TejooWhatsApp.Security.PageAccessService>();
+builder.Services.AddScoped<TejooWhatsApp.Security.VisibilityService>();
+
 // Register Services
 builder.Services.AddScoped<ConversationService>();
 builder.Services.AddScoped<MessageService>();
@@ -140,13 +144,22 @@ builder.Services.AddScoped<NotificationService>();
 
 // SQL-backed message queue — Singleton; DatabaseHelper + ILogger injected automatically
 builder.Services.AddSingleton<MessageQueueService>();
-builder.Services.AddHostedService<MediaCleanupService>();
-builder.Services.AddHostedService<MessageProcessorService>();
-builder.Services.AddHostedService<ConversationAutoCloseService>();
-builder.Services.AddHostedService<EscalationTimeoutService>();
-builder.Services.AddHostedService<ConversationSummaryService>();
-builder.Services.AddHostedService<CatalogSendService>();
-builder.Services.AddHostedService<ConversationRetentionService>();
+
+// Background workers (inbound queue, auto-close, escalation timer, summaries, catalog sends,
+// retention, media cleanup). Exactly ONE instance per database should run them — a dev machine
+// pointed at the live database must set BackgroundJobs:Enabled=false, or it processes live
+// customer messages and spends OpenAI credits alongside the production server.
+var backgroundJobsEnabled = builder.Configuration.GetValue("BackgroundJobs:Enabled", true);
+if (backgroundJobsEnabled)
+{
+    builder.Services.AddHostedService<MediaCleanupService>();
+    builder.Services.AddHostedService<MessageProcessorService>();
+    builder.Services.AddHostedService<ConversationAutoCloseService>();
+    builder.Services.AddHostedService<EscalationTimeoutService>();
+    builder.Services.AddHostedService<ConversationSummaryService>();
+    builder.Services.AddHostedService<CatalogSendService>();
+    builder.Services.AddHostedService<ConversationRetentionService>();
+}
 
 // Register AI Services
 builder.Services.AddSingleton<TejooWhatsApp.AI.AiHealthState>();
@@ -157,6 +170,9 @@ builder.Services.AddScoped<AiRouterService>();
 var app = builder.Build();
 
 var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+
+if (!backgroundJobsEnabled)
+    startupLogger.LogWarning("BackgroundJobs:Enabled = false — inbound messages, auto-close, escalation timers, summaries, catalog sends and cleanup are NOT processed by this instance.");
 
 // Run database migrations via DbUp on startup (idempotent; controlled by config flag, default on)
 if (builder.Configuration.GetValue("Database:RunMigrationsOnStartup", true))

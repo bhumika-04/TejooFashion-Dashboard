@@ -69,16 +69,21 @@ public class MessageRepository
         return (items.ToList(), total);
     }
 
-    public async Task<List<Message>> GetByConversationIdAsync(int conversationId, int limit = 50)
+    /// <summary>
+    /// Up to <paramref name="limit"/> messages, returned oldest→newest. By default these are the
+    /// NEWEST messages (what a chat window, summary or tagger needs); pass <paramref name="oldestFirst"/>
+    /// to take the oldest instead (retention summarising what it's about to delete).
+    /// </summary>
+    public async Task<List<Message>> GetByConversationIdAsync(int conversationId, int limit = 50, bool oldestFirst = false)
     {
         using var conn = _db.CreateConnection();
-        var sql = @"
+        var sql = $@"
             SELECT TOP (@Limit) * FROM Messages
             WHERE ConversationId = @ConversationId
-            ORDER BY CreatedAt ASC";
+            ORDER BY CreatedAt {(oldestFirst ? "ASC" : "DESC")}, Id {(oldestFirst ? "ASC" : "DESC")}";
 
         var result = await conn.QueryAsync<Message>(sql, new { ConversationId = conversationId, Limit = limit });
-        return result.ToList();
+        return result.OrderBy(m => m.CreatedAt).ThenBy(m => m.Id).ToList();
     }
 
     public async Task<List<Message>> GetRecentMessagesAsync(int conversationId, int count = 10)
@@ -127,6 +132,12 @@ public class MessageRepository
 
         var rows = await conn.ExecuteAsync(sql, message);
         return rows > 0;
+    }
+
+    public async Task DeleteAsync(int messageId)
+    {
+        using var conn = _db.CreateConnection();
+        await conn.ExecuteAsync("DELETE FROM Messages WHERE Id = @Id", new { Id = messageId });
     }
 
     public async Task UpdateDeliveryAsync(int messageId, string providerMessageId)

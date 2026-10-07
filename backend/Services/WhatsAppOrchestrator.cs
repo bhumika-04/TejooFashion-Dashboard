@@ -78,24 +78,13 @@ public class WhatsAppOrchestrator
     /// </summary>
     public async Task<AiSuggestion?> GenerateSuggestionOnDemandAsync(int conversationId)
     {
-        var conversation = await _conversationRepo.GetByIdAsync(conversationId);
-        if (conversation == null || string.Equals(conversation.Status, "Closed", StringComparison.OrdinalIgnoreCase))
-            return null;
+        var ctx = await GetSuggestionContextAsync(conversationId);
+        if (ctx == null) return null;
+        var (conversation, recent, last) = ctx.Value;
 
         // Already have a draft ready — hand it back, don't regenerate (no OpenAI call).
         var existing = await _suggestionRepo.GetPendingAsync(conversationId);
         if (existing != null) return existing;
-
-        // Respect the number's AI mode: only the copilot ('suggest', the default) drafts on demand.
-        var session = await _sessionRepo.GetByIdAsync(conversation.SessionId);
-        var aiMode = string.IsNullOrWhiteSpace(session?.AiMode) ? "suggest" : session!.AiMode.Trim().ToLowerInvariant();
-        if (aiMode != "suggest") return null;
-
-        // Only suggest when the customer spoke last (we're the ones who owe a reply).
-        var recent = await _messageService.GetRecentMessagesForContextAsync(conversationId, 10);
-        var last = recent.LastOrDefault();
-        if (last == null || !string.Equals(last.Direction, "inbound", StringComparison.OrdinalIgnoreCase))
-            return null;
 
         // Internal/opted-out numbers get no AI.
         if (await _bypassRepo.IsActiveBypassAsync(conversation.CustomerPhone))
@@ -130,6 +119,46 @@ public class WhatsAppOrchestrator
         return await _suggestionRepo.GetPendingAsync(conversationId);
     }
 
+    /// <summary>
+    /// The customer message we still owe a reply to: the latest message that is either from us or a
+    /// non-acknowledgement inbound ("Ok"/"Thanks"/👍 are skipped over). Null when that message is
+    /// ours, i.e. we already replied and the customer has only acknowledged since.
+    /// </summary>
+    private static Message? MessageAwaitingReply(IEnumerable<Message> chronological)
+    {
+        var last = chronological.LastOrDefault(m =>
+            !string.Equals(m.Direction, "inbound", StringComparison.OrdinalIgnoreCase)
+            || !AiHeuristics.IsAcknowledgement(m.Content, m.MessageType));
+        return last != null && string.Equals(last.Direction, "inbound", StringComparison.OrdinalIgnoreCase) ? last : null;
+    }
+
+    /// <summary>
+    /// Whether an AI draft may be shown for this chat right now, and if so the context to draft from.
+    /// Null when the chat is closed, suggestions are switched off in Settings, the number isn't in
+    /// Suggest mode, or nothing is awaiting a reply. Every path that hands a draft to the UI goes
+    /// through this, so a stored draft can never resurface after any of those change.
+    /// </summary>
+    private async Task<(Conversation Conversation, List<Message> Recent, Message Last)?> GetSuggestionContextAsync(int conversationId)
+    {
+        var conversation = await _conversationRepo.GetByIdAsync(conversationId);
+        if (conversation == null || string.Equals(conversation.Status, "Closed", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!await _settings.IsAiSuggestionsEnabledAsync()) return null;
+
+        var session = await _sessionRepo.GetByIdAsync(conversation.SessionId);
+        var aiMode = string.IsNullOrWhiteSpace(session?.AiMode) ? "suggest" : session!.AiMode.Trim().ToLowerInvariant();
+        if (aiMode != "suggest") return null;
+
+        var recent = await _messageService.GetRecentMessagesForContextAsync(conversationId, 10);
+        var last = MessageAwaitingReply(recent);
+        return last == null ? null : (conversation, recent, last);
+    }
+
+    /// <summary>The stored pending draft, only if it may be shown now (see <see cref="GetSuggestionContextAsync"/>).</summary>
+    public async Task<AiSuggestion?> GetShowablePendingSuggestionAsync(int conversationId) =>
+        await GetSuggestionContextAsync(conversationId) == null ? null : await _suggestionRepo.GetPendingAsync(conversationId);
+
     public async Task<bool> ProcessIncomingMessageAsync(
         string provider,
         string businessPhone,
@@ -160,11 +189,14 @@ public class WhatsAppOrchestrator
                 _logger.LogDebug("Fallback to first active Interakt session: {Result}", session == null ? "NULL" : $"Found ID={session.Id}, Phone={session.PhoneNumber}");
             }
 
-            if (session == null || !session.IsActive)
+            if (session == null)
             {
-                await LogWebhookAsync(provider, $"Session not found or inactive for provider {provider}", false);
+                await LogWebhookAsync(provider, $"Session not found for provider {provider}", false);
                 return false;
             }
+            // A deactivated number still SAVES what customers send (dropping it would lose the message
+            // for good); it just gets no AI processing — see the inactive check after saving below.
+            var sessionInactive = !session.IsActive;
 
             // 2. Get or create conversation
             // 2a. Idempotency — skip if this provider message was already processed
@@ -185,6 +217,13 @@ public class WhatsAppOrchestrator
             {
                 await LogWebhookAsync(provider, "Failed to create conversation", false);
                 return false;
+            }
+
+            // 2b. A real new message on a resolved chat reopens it; a closing "Ok/Thanks" doesn't.
+            if (string.Equals(conversation.Status, "Closed", StringComparison.OrdinalIgnoreCase)
+                && !AiHeuristics.IsAcknowledgement(messageContent, messageType))
+            {
+                await _conversationService.ReopenForNewMessageAsync(conversation);
             }
 
             // 3. Save incoming message
@@ -217,11 +256,25 @@ public class WhatsAppOrchestrator
                 }
             }
 
+            if (sessionInactive)
+            {
+                await LogWebhookAsync(provider, $"Message saved on deactivated number {session.PhoneNumber}; AI skipped.", true);
+                return true;
+            }
+
             // 3a-1. Internal team data-dump (TF#### reports / "CRR/Whatsapp Name" notes) — not a customer
             //       query. Skip AI entirely so it never gets an auto-reply.
             if (AiHeuristics.IsInternalReport(messageContent))
             {
                 await LogWebhookAsync(provider, "Internal report message — saved, AI skipped.", true);
+                return true;
+            }
+
+            // 3a-1b. "Ok" / "Thanks" / 👍 — the customer is closing the exchange, not asking anything.
+            //        No AI draft or auto-reply (any pending draft for their earlier question is kept).
+            if (AiHeuristics.IsAcknowledgement(messageContent, messageType))
+            {
+                await LogWebhookAsync(provider, "Acknowledgement message — saved, no reply needed, AI skipped.", true);
                 return true;
             }
 
@@ -282,6 +335,13 @@ public class WhatsAppOrchestrator
             {
                 _logger.LogDebug("Outside business hours — skipping AI auto-reply for conversation {Id}.", conversation.Id);
                 await LogWebhookAsync(provider, "Message saved. Outside business hours.", true);
+                return true;
+            }
+
+            // 4c. Global AI-suggestions switch (Settings page) overrides suggest mode on every number.
+            if (aiMode == "suggest" && !await _settings.IsAiSuggestionsEnabledAsync())
+            {
+                await LogWebhookAsync(provider, "Message saved. AI suggestions are disabled in Settings.", true);
                 return true;
             }
 
@@ -403,7 +463,10 @@ public class WhatsAppOrchestrator
         catch (Exception ex)
         {
             await LogWebhookAsync(provider, $"Error: {ex.Message}", false);
-            return false;
+            // Rethrow so MessageProcessorService marks the inbox row Failed and retries it — swallowing
+            // here made every failure look "Done". A retry is safe: once the message is saved, the
+            // ProviderMessageId check above skips it.
+            throw;
         }
     }
 
@@ -440,8 +503,19 @@ public class WhatsAppOrchestrator
                 messageType: messageType,
                 mediaUrl: mediaUrl);
 
-            // Send via provider API using PUBLIC URL so Interakt/Meta can fetch the file
-            var providerMsgId = await SendWhatsAppMessageAsync(session, conversation.CustomerPhone, content, session.Provider, messageType, publicMediaUrl);
+            // Send via provider API using PUBLIC URL so Interakt/Meta can fetch the file. If the send
+            // fails, remove the row we just saved — otherwise the chat shows a message the customer
+            // never got (and it counts as a reply for SLA).
+            string? providerMsgId;
+            try
+            {
+                providerMsgId = await SendWhatsAppMessageAsync(session, conversation.CustomerPhone, content, session.Provider, messageType, publicMediaUrl);
+            }
+            catch
+            {
+                await _messageRepo.DeleteAsync(message.Id);
+                throw;
+            }
             if (!string.IsNullOrEmpty(providerMsgId))
                 await _messageRepo.UpdateDeliveryAsync(message.Id, providerMsgId);
             else
@@ -686,7 +760,9 @@ public class WhatsAppOrchestrator
         var endTime   = TimeOnly.TryParse(endStr,   out var e) ? e : new TimeOnly(18, 0);
         var nowTime   = TimeOnly.FromDateTime(localNow);
 
-        return nowTime >= startTime && nowTime <= endTime;
+        return startTime <= endTime
+            ? nowTime >= startTime && nowTime <= endTime        // same-day window, e.g. 09:00–18:00
+            : nowTime >= startTime || nowTime <= endTime;       // overnight window, e.g. 20:00–08:00
     }
 
     private async Task LogWebhookAsync(string provider, string message, bool success)

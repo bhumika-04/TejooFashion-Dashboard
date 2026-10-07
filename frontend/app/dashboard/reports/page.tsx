@@ -10,7 +10,7 @@ import {
   ChevronDown, FileText, FileSpreadsheet, Smile, Meh, Frown,
 } from 'lucide-react';
 import { KPICard } from '@/components/ui/kpi-card';
-import { formatDateOnly, formatChartDate, formatNumber } from '@/lib/utils';
+import { formatDateOnly, formatChartDate, formatNumber, parseUTCDate } from '@/lib/utils';
 import { DASHBOARD_RANGE_EVENT, DashboardRangeDetail, rangeToDays } from '@/lib/dateRange';
 import { exportExcel, exportPdf, exportDocx } from '@/lib/reportExport';
 import type { TableBlock, PieBlock, Kpi } from '@/lib/reportExport';
@@ -19,7 +19,7 @@ interface TeamReport {
   id: number; name: string; managerName: string; isActive: boolean;
   memberCount: number; conversationsHandled: number; activeConversations: number;
   escalationsReceived: number; escalationsResolved: number;
-  resolutionRate: number; avgResponseTime: number;
+  resolutionRate: number; avgResolutionHours: number;
 }
 interface HourlyRow { hour: number; messageCount: number; inbound: number; outbound: number; }
 interface TopCustomer { customerPhone: string; customerName?: string; messageCount: number; conversationCount: number; lastMessageAt?: string; }
@@ -76,7 +76,7 @@ function BarChart({ data }: { data: any[] }) {
         const showLabel = sorted.length <= 14 || i % Math.ceil(sorted.length / 14) === 0;
         return (
           <g key={i}>
-            {/* Total bar background (inbound messages) */}
+            {/* Total bar background (all messages that day) */}
             <rect x={x} y={H - totalH} width={barW} height={totalH}
               rx={3} fill="#d1fae5" />
             {/* Human reply portion (bottom of bar) */}
@@ -108,7 +108,7 @@ function BarChart({ data }: { data: any[] }) {
 
       {/* Legend */}
       <rect x={PL} y={3} width={9} height={9} fill="#d1fae5" rx={2} />
-      <text x={PL + 12} y={11} fontSize={9} fill="#6b7280">Inbound msgs</text>
+      <text x={PL + 12} y={11} fontSize={9} fill="#6b7280">All msgs</text>
       <rect x={PL + 90} y={3} width={9} height={9} fill="#60a5fa" rx={2} />
       <text x={PL + 102} y={11} fontSize={9} fill="#6b7280">AI replies</text>
       <rect x={PL + 160} y={3} width={9} height={9} fill="#34d399" rx={2} />
@@ -365,8 +365,8 @@ export default function ReportsPage() {
           dashboardApi.getResponseSla(period, 30).catch(() => ({ data: null })),
           dashboardApi.getResolution(period).catch(() => ({ data: null })),
           dashboardApi.getPeriodComparison(period).catch(() => ({ data: null })),
-          dashboardApi.getAiSuggestionStats(period <= 7 ? 'week' : 'month').catch(() => ({ data: null })),
-          dashboardApi.getAiSuggestionsByAgent(period <= 7 ? 'week' : 'month').catch(() => ({ data: [] })),
+          dashboardApi.getAiSuggestionStats(period === 1 ? 'today' : period <= 7 ? 'week' : 'month').catch(() => ({ data: null })),
+          dashboardApi.getAiSuggestionsByAgent(period === 1 ? 'today' : period <= 7 ? 'week' : 'month').catch(() => ({ data: [] })),
           dashboardApi.getSentiment(period).catch(() => ({ data: null })),
           dashboardApi.getResponseTimeTrend(period).catch(() => ({ data: [] })),
         ]);
@@ -387,7 +387,7 @@ export default function ReportsPage() {
       // and the Resolution Rate KPI follow the header date filter like the rest of the page.
       const escFrom = new Date(); escFrom.setHours(0, 0, 0, 0); escFrom.setDate(escFrom.getDate() - (period - 1));
       const escalations: any[] = ((escalationsRes.data as any[]) ?? []).filter((e: any) => {
-        const d = e.escalatedAt ? new Date(e.escalatedAt) : null;
+        const d = parseUTCDate(e.escalatedAt);
         return d ? d >= escFrom : true;
       });
 
@@ -408,8 +408,9 @@ export default function ReportsPage() {
         const teamAgents = agentStats.filter((a: any) => memberIds.has(a.userId));
         const conversationsHandled = teamAgents.reduce((s, a) => s + (a.totalConversations || 0), 0);
         const activeConversations  = teamAgents.reduce((s, a) => s + (a.activeConversations  || 0), 0);
-        const avgResponseTime = teamAgents.length
-          ? Math.round(teamAgents.reduce((s, a) => s + (a.avgResolutionMinutes || 0), 0) / teamAgents.length / 60)
+        // Average open→closed time of the team's chats, in hours (resolution, not first response).
+        const avgResolutionHours = teamAgents.length
+          ? Math.round(teamAgents.reduce((s, a) => s + (a.avgResolutionMinutes || 0), 0) / teamAgents.length / 6) / 10
           : 0;
         const escalationsReceived = escalations.filter((e: any) => memberIds.has(e.escalatedToUserId));
         const escalationsResolved = escalationsReceived.filter((e: any) => e.status === 'Resolved');
@@ -421,7 +422,7 @@ export default function ReportsPage() {
           conversationsHandled, activeConversations,
           escalationsReceived: escalationsReceived.length,
           escalationsResolved: escalationsResolved.length,
-          resolutionRate, avgResponseTime,
+          resolutionRate, avgResolutionHours,
         };
       });
       setTeams(teamList);
@@ -450,7 +451,8 @@ export default function ReportsPage() {
   const totalConvsReal  = resolution?.totalConversations ?? 0;
   const totalAI       = trends.reduce((s, d) => s + (d.aiHandled || 0), 0);
   const totalHuman    = trends.reduce((s, d) => s + (d.humanHandled || 0), 0);
-  const aiRate        = totalMessages > 0 ? (totalAI / totalMessages) * 100 : 0;
+  // Share of replies sent by AI (same definition as the Overview "AI Handling Rate").
+  const aiRate        = totalAI + totalHuman > 0 ? (totalAI / (totalAI + totalHuman)) * 100 : 0;
 
   const peakHour = hourly.length
     ? hourly.reduce((best, h) => h.messageCount > best.messageCount ? h : best, hourly[0])
@@ -501,9 +503,9 @@ export default function ReportsPage() {
   ]);
 
   const exportTeams = () => downloadCsv(`team-performance-${period}d.csv`, [
-    ['Team', 'Manager', 'Members', 'Active', 'Handled', 'Escalations', 'Resolution %', 'Avg Time (h)', 'Status'],
+    ['Team', 'Manager', 'Members', 'Active', 'Handled', 'Escalations', 'Resolution %', 'Avg Resolution (h)', 'Status'],
     ...filteredTeams.map(t => [t.name, t.managerName, t.memberCount, t.activeConversations,
-      t.conversationsHandled, t.escalationsReceived, t.resolutionRate.toFixed(0), t.avgResponseTime,
+      t.conversationsHandled, t.escalationsReceived, t.resolutionRate.toFixed(0), t.avgResolutionHours,
       t.isActive ? 'Active' : 'Inactive']),
   ]);
 
@@ -560,9 +562,9 @@ export default function ReportsPage() {
     });
     if (filteredTeams.length) blocks.push({
       title: 'Team Performance',
-      headers: ['Team', 'Manager', 'Members', 'Active', 'Handled', 'Esc Recv', 'Esc Resolved', 'Resolution %', 'Avg Time (m)', 'Status'],
+      headers: ['Team', 'Manager', 'Members', 'Active', 'Handled', 'Esc Recv', 'Esc Resolved', 'Resolution %', 'Avg Resolution (h)', 'Status'],
       rows: filteredTeams.map(t => [t.name, t.managerName, t.memberCount, t.activeConversations,
-        t.conversationsHandled, t.escalationsReceived, t.escalationsResolved, t.resolutionRate.toFixed(0), t.avgResponseTime,
+        t.conversationsHandled, t.escalationsReceived, t.escalationsResolved, t.resolutionRate.toFixed(0), t.avgResolutionHours,
         t.isActive ? 'Active' : 'Inactive']),
     });
     if (filteredAgents.length) blocks.push({

@@ -4,6 +4,7 @@ using TejooWhatsApp.Repositories;
 namespace TejooWhatsApp.Controllers;
 
 [Microsoft.AspNetCore.Authorization.Authorize]
+[TejooWhatsApp.Security.RequirePage("escalations")]
 [ApiController]
 [Route("api/aibypass")]
 public class AiBypassController : ControllerBase

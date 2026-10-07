@@ -102,6 +102,10 @@ export const settingsApi = {
   getRetention: () => apiClient.get('/settings/retention'),
   updateRetention: (enabled: boolean, days: number) =>
     apiClient.put('/settings/retention', { enabled, days }),
+
+  getAiSuggestions: () => apiClient.get('/settings/ai-suggestions'),
+  updateAiSuggestions: (enabled: boolean) =>
+    apiClient.put('/settings/ai-suggestions', { enabled }),
 };
 
 export const conversationsApi = {
@@ -174,9 +178,10 @@ export const conversationsApi = {
   bulkAction: (ids: number[], action: 'close' | 'assign' | 'tag', opts: { userId?: number; tagId?: number } = {}) =>
     apiClient.post('/conversations/bulk', { ids, action, userId: opts.userId, tagId: opts.tagId }),
 
-  search: (q: string, limit: number = 30, assignedUserId?: number) => {
+  search: (q: string, limit: number = 30, assignedUserId?: number, sessionId?: number) => {
     const params = new URLSearchParams({ q, limit: limit.toString() });
     if (assignedUserId) params.append('assignedUserId', assignedUserId.toString());
+    if (sessionId) params.append('sessionId', sessionId.toString());
     return apiClient.get(`/conversations/search?${params}`);
   },
 

@@ -95,6 +95,10 @@ public class TeamEscalationPolicyRepository
             LEFT JOIN TeamEscalationPolicies tep ON tep.TeamId = tm.TeamId AND tep.IsActive = 1
             WHERE e.Status IN ('Pending', 'InProgress')
               AND e.EscalationLevel <= 3
+              -- A team whose policy is switched OFF doesn't escalate at all (defaults apply only
+              -- when the team has no policy row).
+              AND NOT EXISTS (SELECT 1 FROM TeamEscalationPolicies off
+                              WHERE off.TeamId = tm.TeamId AND off.IsActive = 0)
               AND (
                   -- Level 1 (CRR) timeout → bump to Manager
                   (e.EscalationLevel = 1
@@ -113,13 +117,18 @@ public class TeamEscalationPolicyRepository
     public async Task BumpEscalationLevelAsync(int escalationId, int newUserId, int newLevel)
     {
         using var conn = _db.CreateConnection();
+        // The conversation follows its escalation — same as manual escalation and reassignment —
+        // so the new Manager/HOD actually sees the chat in their list.
         await conn.ExecuteAsync(@"
             UPDATE Escalations
             SET EscalatedToUserId = @NewUserId,
                 EscalationLevel   = @NewLevel,
                 LastEscalatedAt   = GETUTCDATE(),
                 Status            = 'Pending'
-            WHERE Id = @Id",
+            WHERE Id = @Id;
+            UPDATE c SET c.AssignedUserId = @NewUserId
+            FROM Conversations c JOIN Escalations e ON e.ConversationId = c.Id
+            WHERE e.Id = @Id AND c.Status <> 'Closed';",
             new { Id = escalationId, NewUserId = newUserId, NewLevel = newLevel });
     }
 }

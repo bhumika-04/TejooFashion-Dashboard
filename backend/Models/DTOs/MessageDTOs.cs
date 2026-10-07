@@ -8,6 +8,7 @@ public class MessageDTO
     public string MessageType { get; set; } = string.Empty;
     public string? Content { get; set; }
     public string? MediaUrl { get; set; }
+    public string? Transcript { get; set; }   // Whisper transcript of an inbound voice note
     public bool IsAiGenerated { get; set; }
     public string? Intent { get; set; }
     public decimal? Confidence { get; set; }

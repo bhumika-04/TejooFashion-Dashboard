@@ -34,6 +34,7 @@ public class EscalationRulesController : ControllerBase
         return Ok(rule);
     }
 
+    [TejooWhatsApp.Security.RequirePage("escalations")]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateEscalationRuleRequest request)
     {
@@ -46,6 +47,7 @@ public class EscalationRulesController : ControllerBase
         return Ok(rule);
     }
 
+    [TejooWhatsApp.Security.RequirePage("escalations")]
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateEscalationRuleRequest request)
     {
@@ -57,6 +59,7 @@ public class EscalationRulesController : ControllerBase
         return Ok(rule);
     }
 
+    [TejooWhatsApp.Security.RequirePage("escalations")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)
     {
@@ -68,6 +71,7 @@ public class EscalationRulesController : ControllerBase
         return Ok(new { success = true });
     }
 
+    [TejooWhatsApp.Security.RequirePage("escalations")]
     [HttpPatch("{id}/toggle")]
     public async Task<IActionResult> ToggleActive(int id, [FromBody] ToggleActiveRequest request)
     {

@@ -42,6 +42,7 @@ public class TeamEscalationPoliciesController : ControllerBase
     }
 
     // PUT /api/team-escalation-policies/{teamId}
+    [TejooWhatsApp.Security.RequirePage("escalations")]
     [HttpPut("{teamId:int}")]
     public async Task<IActionResult> Upsert(int teamId, [FromBody] UpsertPolicyRequest req)
     {

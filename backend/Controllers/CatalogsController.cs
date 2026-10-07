@@ -46,6 +46,7 @@ public class CatalogsController : ControllerBase
         return catalog == null ? NotFound(new { error = "Catalog not found" }) : Ok(catalog);
     }
 
+    [TejooWhatsApp.Security.RequirePage("catalogs")]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateCatalogRequest request)
     {
@@ -60,6 +61,7 @@ public class CatalogsController : ControllerBase
         return Ok(new { success = true, id });
     }
 
+    [TejooWhatsApp.Security.RequirePage("catalogs")]
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateCatalogRequest request)
     {
@@ -75,6 +77,7 @@ public class CatalogsController : ControllerBase
         return Ok(new { success = true });
     }
 
+    [TejooWhatsApp.Security.RequirePage("catalogs")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)
     {
@@ -88,6 +91,7 @@ public class CatalogsController : ControllerBase
     }
 
     // Add images (from the gallery) to a catalog; duplicates are skipped.
+    [TejooWhatsApp.Security.RequirePage("catalogs")]
     [HttpPost("{id}/items")]
     public async Task<IActionResult> AddItems(int id, [FromBody] AddCatalogItemsRequest request)
     {
@@ -100,6 +104,7 @@ public class CatalogsController : ControllerBase
         return Ok(new { success = true, added });
     }
 
+    [TejooWhatsApp.Security.RequirePage("catalogs")]
     [HttpDelete("{id}/items/{itemId}")]
     public async Task<IActionResult> RemoveItem(int id, int itemId)
     {
@@ -113,7 +118,8 @@ public class CatalogsController : ControllerBase
     {
         if (request.ConversationId <= 0)
             return BadRequest(new { error = "conversationId is required" });
-        if (await _conversations.GetByIdAsync(request.ConversationId) == null)
+        var visibility = HttpContext.RequestServices.GetRequiredService<TejooWhatsApp.Security.VisibilityService>();
+        if (!await visibility.CanAccessConversationAsync(User, request.ConversationId))
             return NotFound(new { error = "Conversation not found" });
 
         var catalogUrls = await _catalogs.GetItemUrlsAsync(id);

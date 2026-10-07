@@ -39,6 +39,8 @@ public class UsersController : ControllerBase
         return (id, name);
     }
 
+    private static bool IsAdminRole(string? role) => string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+
     private string GenerateJwtToken(User user)
     {
         var secret = _configuration["Jwt:SecretKey"]!;
@@ -108,12 +110,15 @@ public class UsersController : ControllerBase
     }
 
     [HttpPost]
+    [TejooWhatsApp.Security.RequirePage("users")]
     public async Task<IActionResult> Create([FromBody] CreateUserRequest request)
     {
         if (string.IsNullOrEmpty(request.Email) || string.IsNullOrEmpty(request.Password))
         {
             return BadRequest(new { error = "Email and password are required" });
         }
+        if (IsAdminRole(request.Role) && !TejooWhatsApp.Security.PageAccessService.IsAdmin(User))
+            return StatusCode(403, new { error = "Only an Admin can create Admin accounts." });
 
         if (await _userRepo.EmailExistsAsync(request.Email))
         {
@@ -154,6 +159,28 @@ public class UsersController : ControllerBase
             return NotFound(new { error = "User not found" });
         }
 
+        // Anyone may edit their own name/email/phone (Settings → Profile). Role, active status and
+        // password resets of OTHER accounts need User Management access; touching an Admin account
+        // or granting Admin needs an Admin. Own password changes go through change-password, which
+        // verifies the current password.
+        var callerId = TejooWhatsApp.Security.PageAccessService.UserIdOf(User);
+        var isSelf = callerId == id;
+        var callerIsAdmin = TejooWhatsApp.Security.PageAccessService.IsAdmin(User);
+        var canManageUsers = await HttpContext.RequestServices
+            .GetRequiredService<TejooWhatsApp.Security.PageAccessService>().CanAccessAnyAsync(User, new[] { "users" });
+
+        // The User Management form always sends role/status — only an actual change counts.
+        var changesAdminFields =
+            (request.Role != null && !string.Equals(request.Role, user.Role, StringComparison.OrdinalIgnoreCase))
+            || (request.IsActive.HasValue && request.IsActive.Value != user.IsActive)
+            || !string.IsNullOrEmpty(request.Password);
+        if (!isSelf && !canManageUsers)
+            return StatusCode(403, new { error = "You can only edit your own profile." });
+        if (isSelf && changesAdminFields && !callerIsAdmin)
+            return StatusCode(403, new { error = "Use Change Password for your password; ask an admin to change your role or status." });
+        if (!callerIsAdmin && (IsAdminRole(user.Role) || IsAdminRole(request.Role)))
+            return StatusCode(403, new { error = "Only an Admin can modify Admin accounts." });
+
         if (request.FullName != null) user.FullName = request.FullName;
         if (request.Email != null)
         {
@@ -164,7 +191,8 @@ public class UsersController : ControllerBase
             user.Email = request.Email;
         }
         if (request.Phone != null) user.Phone = request.Phone;
-        if (request.Password != null) user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
+        // The edit form sends "" when the password box is left empty ("leave empty to keep current").
+        if (!string.IsNullOrEmpty(request.Password)) user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
         if (request.Role != null) user.Role = request.Role;
         if (request.IsActive.HasValue) user.IsActive = request.IsActive.Value;
 
@@ -178,8 +206,8 @@ public class UsersController : ControllerBase
 
         _logger.LogInformation("✓ User updated: {UserName} ({Email})", user.FullName, user.Email);
 
-        var (callerId, callerName) = GetCaller();
-        await _auditRepo.LogAsync("user.update", callerId, callerName, "User", id,
+        var (auditCallerId, callerName) = GetCaller();
+        await _auditRepo.LogAsync("user.update", auditCallerId, callerName, "User", id,
             null, $"{{\"name\":\"{user.FullName}\",\"email\":\"{user.Email}\",\"role\":\"{user.Role}\"}}",
             HttpContext.Connection.RemoteIpAddress?.ToString());
 
@@ -187,9 +215,12 @@ public class UsersController : ControllerBase
     }
 
     [HttpDelete("{id}")]
+    [TejooWhatsApp.Security.RequirePage("users")]
     public async Task<IActionResult> Delete(int id)
     {
         var user = await _userRepo.GetByIdAsync(id);
+        if (user != null && IsAdminRole(user.Role) && !TejooWhatsApp.Security.PageAccessService.IsAdmin(User))
+            return StatusCode(403, new { error = "Only an Admin can delete Admin accounts." });
         var result = await _userRepo.DeleteAsync(id);
         if (!result)
         {
@@ -255,6 +286,11 @@ public class UsersController : ControllerBase
     [HttpPost("{id}/change-password")]
     public async Task<IActionResult> ChangePassword(int id, [FromBody] ChangePasswordRequest request)
     {
+        if (TejooWhatsApp.Security.PageAccessService.UserIdOf(User) != id)
+            return StatusCode(403, new { error = "You can only change your own password." });
+        if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 6)
+            return BadRequest(new { error = "New password must be at least 6 characters" });
+
         var user = await _userRepo.GetByIdAsync(id);
         if (user == null)
         {

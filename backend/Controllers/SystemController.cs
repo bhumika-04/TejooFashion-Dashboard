@@ -8,7 +8,8 @@ namespace TejooWhatsApp.Controllers;
 /// Operational health for admins/HODs: incoming-message queue status (backlog, failures,
 /// dead letters with retry/discard) and public-URL (ngrok) configuration sanity.
 /// </summary>
-[Authorize(Roles = "Admin,HOD")]
+[Authorize]
+[TejooWhatsApp.Security.RequirePage("system-health")]
 [ApiController]
 [Route("api/[controller]")]
 public class SystemController : ControllerBase

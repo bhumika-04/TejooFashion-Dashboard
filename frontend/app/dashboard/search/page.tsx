@@ -72,9 +72,9 @@ export default function SearchPage() {
   const clearSearch = () => { setQuery(''); setResults(null); setSearched(false); };
 
   const handleClick = (r: SearchResult) => {
-    if (r.resultType === 'conversation') router.push('/dashboard/conversations');
-    else if (r.resultType === 'message') router.push('/dashboard/conversations');
-    else if (r.resultType === 'customer') router.push('/dashboard/customers');
+    if (r.resultType === 'conversation') router.push(`/dashboard/conversations?id=${r.id}`);
+    else if (r.resultType === 'message') router.push(`/dashboard/conversations?id=${r.conversationId ?? ''}`);
+    else if (r.resultType === 'customer') router.push(`/dashboard/customers?search=${encodeURIComponent(r.subtitle ?? r.title)}`);
     else if (r.resultType === 'user') router.push('/dashboard/users');
   };
 

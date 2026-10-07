@@ -111,8 +111,10 @@ public class CustomerRepository
             USING (SELECT @Phone AS Phone) AS source ON target.Phone = source.Phone
             WHEN MATCHED THEN
                 UPDATE SET
-                    Name  = COALESCE(@Name, target.Name),
-                    Email = COALESCE(@Email, target.Email),
+                    -- The WhatsApp profile name only fills a blank name; a name an agent saved on the
+                    -- Customers page is never overwritten by the next incoming message.
+                    Name  = CASE WHEN target.Name IS NULL OR LTRIM(RTRIM(target.Name)) = '' THEN @Name ELSE target.Name END,
+                    Email = COALESCE(target.Email, @Email),
                     TotalConversations = (SELECT COUNT(*) FROM Conversations WHERE CustomerPhone = @Phone),
                     LastSeenAt = GETUTCDATE(),
                     UpdatedAt  = GETUTCDATE()

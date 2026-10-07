@@ -14,6 +14,7 @@ public class AiPromptsController : ControllerBase
     private readonly PromptLoader _promptLoader;
     private readonly AiRouterService _aiRouter;
     private readonly MessageRepository _messageRepo;
+    private readonly SystemSettingsRepository _settings;
     private readonly ILogger<AiPromptsController> _logger;
 
     public AiPromptsController(
@@ -21,18 +22,21 @@ public class AiPromptsController : ControllerBase
         PromptLoader promptLoader,
         AiRouterService aiRouter,
         MessageRepository messageRepo,
+        SystemSettingsRepository settings,
         ILogger<AiPromptsController> logger)
     {
         _promptRepo = promptRepo;
         _promptLoader = promptLoader;
         _aiRouter = aiRouter;
         _messageRepo = messageRepo;
+        _settings = settings;
         _logger = logger;
     }
 
     // Dry-run the real AI pipeline (router → specialist) for a message and return what it WOULD do —
     // intent, reply, confidence, and the same send/escalate decision the orchestrator makes — WITHOUT
     // sending anything or touching the conversation. Lets the team vet the AI before enabling auto-reply.
+    [TejooWhatsApp.Security.RequirePage("escalations", "ai-prompts")]
     [HttpPost("test")]
     public async Task<IActionResult> Test([FromBody] TestPromptRequest request)
     {
@@ -45,9 +49,13 @@ public class AiPromptsController : ControllerBase
 
         var result = await _aiRouter.ProcessMessageAsync(request.Message, history);
 
-        // Mirror WhatsAppOrchestrator's decision so the preview matches real runtime behaviour.
+        // Mirror WhatsAppOrchestrator's Auto-mode decision — same escalation mode and confidence
+        // threshold from the Escalation Policy — so the preview matches real runtime behaviour.
+        var escMode = (await _settings.GetAsync("escalation.mode")) ?? "auto";
+        var thresholdPct = int.TryParse(await _settings.GetAsync("escalation.confidenceThreshold"), out var tp) ? tp : 50;
+        var lowConfidence = result.Confidence.HasValue && result.Confidence < thresholdPct / 100m;
         string decision;
-        if (result.ShouldEscalate || (result.Confidence.HasValue && result.Confidence < 0.5m))
+        if (result.ShouldEscalate || (escMode != "manual" && lowConfidence))
             decision = "escalate";
         else if (!string.IsNullOrWhiteSpace(result.ResponseText))
             decision = "send";
@@ -65,6 +73,7 @@ public class AiPromptsController : ControllerBase
         });
     }
 
+    [TejooWhatsApp.Security.RequirePage("escalations", "ai-prompts")]
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
@@ -72,6 +81,7 @@ public class AiPromptsController : ControllerBase
         return Ok(prompts);
     }
 
+    [TejooWhatsApp.Security.RequirePage("escalations", "ai-prompts")]
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateAiPromptRequest request)
     {
@@ -96,6 +106,7 @@ public class AiPromptsController : ControllerBase
         return Ok(new { success = true });
     }
 
+    [TejooWhatsApp.Security.RequirePage("escalations", "ai-prompts")]
     [HttpPost("{id}/toggle")]
     public async Task<IActionResult> Toggle(int id, [FromBody] TogglePromptRequest request)
     {

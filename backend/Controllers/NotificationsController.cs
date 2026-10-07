@@ -27,10 +27,21 @@ public class NotificationsController : ControllerBase
         _logger = logger;
     }
 
+    /// <summary>
+    /// Notifications are personal: every endpoint acts on the signed-in user from the JWT. The
+    /// {userId} in the route is kept for API compatibility but must be the caller's own id.
+    /// </summary>
+    private int? Caller() => TejooWhatsApp.Security.PageAccessService.UserIdOf(User);
+
+    private IActionResult? DenyUnlessSelf(int userId) =>
+        Caller() == userId ? null : StatusCode(403, new { error = "You can only access your own notifications." });
+
     // Get notifications for a user
     [HttpGet("user/{userId:int}")]
     public async Task<IActionResult> GetUserNotifications(int userId, [FromQuery] bool unreadOnly = false, [FromQuery] int limit = 50)
     {
+        if (DenyUnlessSelf(userId) is { } denied) return denied;
+        limit = Math.Clamp(limit, 1, 200);
         var notifications = await _notificationRepo.GetByUserIdAsync(userId, unreadOnly, limit);
         var unreadCount = await _notificationRepo.GetUnreadCountAsync(userId);
 
@@ -45,6 +56,7 @@ public class NotificationsController : ControllerBase
     [HttpGet("user/{userId:int}/unread-count")]
     public async Task<IActionResult> GetUnreadCount(int userId)
     {
+        if (DenyUnlessSelf(userId) is { } denied) return denied;
         var count = await _notificationRepo.GetUnreadCountAsync(userId);
         return Ok(new { unreadCount = count });
     }
@@ -53,7 +65,7 @@ public class NotificationsController : ControllerBase
     [HttpPost("{notificationId}/read")]
     public async Task<IActionResult> MarkAsRead(int notificationId)
     {
-        var result = await _notificationRepo.MarkAsReadAsync(notificationId);
+        var result = await _notificationRepo.MarkAsReadAsync(notificationId, Caller() ?? -1);
         if (!result)
         {
             return NotFound(new { error = "Notification not found" });
@@ -67,6 +79,7 @@ public class NotificationsController : ControllerBase
     [HttpPost("user/{userId:int}/read-all")]
     public async Task<IActionResult> MarkAllAsRead(int userId)
     {
+        if (DenyUnlessSelf(userId) is { } denied) return denied;
         var count = await _notificationRepo.MarkAllAsReadAsync(userId);
         _logger.LogInformation("✓ Marked {Count} notifications as read for user {UserId}", count, userId);
         return Ok(new { success = true, markedCount = count });
@@ -74,8 +87,9 @@ public class NotificationsController : ControllerBase
 
     // Record that user viewed a conversation (for unread tracking)
     [HttpPost("conversation/{conversationId}/view")]
-    public async Task<IActionResult> MarkConversationViewed(int conversationId, [FromQuery] int userId)
+    public async Task<IActionResult> MarkConversationViewed(int conversationId)
     {
+        var userId = Caller() ?? -1;
         await _conversationViewRepo.UpdateLastViewedAsync(conversationId, userId);
         _logger.LogInformation("✓ Conversation {ConversationId} marked as viewed by user {UserId}", conversationId, userId);
         return Ok(new { success = true });
@@ -83,8 +97,9 @@ public class NotificationsController : ControllerBase
 
     // Get unread message count for a specific conversation
     [HttpGet("conversation/{conversationId}/unread")]
-    public async Task<IActionResult> GetConversationUnreadCount(int conversationId, [FromQuery] int userId)
+    public async Task<IActionResult> GetConversationUnreadCount(int conversationId)
     {
+        var userId = Caller() ?? -1;
         var count = await _conversationViewRepo.GetUnreadMessageCountAsync(conversationId, userId);
         return Ok(new { unreadCount = count });
     }
@@ -93,6 +108,7 @@ public class NotificationsController : ControllerBase
     [HttpGet("user/{userId:int}/unread-conversations")]
     public async Task<IActionResult> GetUnreadConversations(int userId)
     {
+        if (DenyUnlessSelf(userId) is { } denied) return denied;
         var totalUnread = await _conversationViewRepo.GetTotalUnreadConversationsAsync(userId);
         var conversations = await _conversationViewRepo.GetConversationsWithUnreadAsync(userId);
 
@@ -105,6 +121,7 @@ public class NotificationsController : ControllerBase
 
     // Create a test notification (for development)
     [HttpPost("test")]
+    [TejooWhatsApp.Security.RequirePage]
     public async Task<IActionResult> CreateTestNotification([FromBody] CreateNotificationRequest request)
     {
         var notification = new Notification

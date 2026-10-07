@@ -92,8 +92,13 @@ export default function Header() {
       <div className="flex items-center gap-4">
         {/* Page-wide date filter (Overview / Reports / Performance) — each initialises to its own default */}
         {pathname === '/dashboard/overview' && <OverviewRangeFilter />}
-        {pathname === '/dashboard/reports' && <OverviewRangeFilter initial="This Week" />}
-        {pathname === '/dashboard/performance' && <OverviewRangeFilter initial="Today" />}
+        {/* Reports/Performance APIs take rolling "last N days" windows, so only those are offered. */}
+        {pathname === '/dashboard/reports' && (
+          <OverviewRangeFilter initial="Last 7 Days" options={['Today', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'Last 365 Days']} />
+        )}
+        {pathname === '/dashboard/performance' && (
+          <OverviewRangeFilter initial="Today" options={['Today', 'Last 7 Days', 'Last 30 Days']} />
+        )}
 
         {/* Notification Bell — real API, polling, mark-as-read */}
         <NotificationBell />

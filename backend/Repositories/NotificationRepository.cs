@@ -50,11 +50,11 @@ public class NotificationRepository
     }
 
     // Mark notification as read
-    public async Task<bool> MarkAsReadAsync(int notificationId)
+    public async Task<bool> MarkAsReadAsync(int notificationId, int userId)
     {
         using var connection = _db.CreateConnection();
-        var sql = "UPDATE Notifications SET IsRead = 1, ReadAt = GETUTCDATE() WHERE Id = @Id";
-        var affected = await connection.ExecuteAsync(sql, new { Id = notificationId });
+        var sql = "UPDATE Notifications SET IsRead = 1, ReadAt = GETUTCDATE() WHERE Id = @Id AND UserId = @UserId";
+        var affected = await connection.ExecuteAsync(sql, new { Id = notificationId, UserId = userId });
         return affected > 0;
     }
 

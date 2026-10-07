@@ -22,7 +22,7 @@ export function usePermissions() {
         setRole(userRole);
 
         // Admin always has full access — skip API call
-        if (userRole === 'Admin') {
+        if (userRole.toLowerCase() === 'admin') {
           setAllowedPages(['*']);
           return;
         }
@@ -38,8 +38,8 @@ export function usePermissions() {
         permissionsCache[userRole] = pages;
         if (!cancelled) setAllowedPages(pages);
       } catch {
-        // If API fails, fall back to full access (graceful degradation)
-        setAllowedPages(['*']);
+        // Fail closed: if permissions can't be loaded, only the pages every role always has.
+        if (!cancelled) setAllowedPages(['overview', 'settings', 'notifications']);
       }
     }
 

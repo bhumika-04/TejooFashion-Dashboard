@@ -91,6 +91,7 @@ public class MessageService
             MessageType = m.MessageType,
             Content = m.Content,
             MediaUrl = m.MediaUrl,
+            Transcript = m.Transcript,
             IsAiGenerated = m.IsAiGenerated,
             Intent = m.Intent,
             Confidence = m.Confidence,

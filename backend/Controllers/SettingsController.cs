@@ -25,6 +25,7 @@ public class SettingsController : ControllerBase
         });
     }
 
+    [TejooWhatsApp.Security.RequirePage("escalations")]
     [HttpPut("escalation-policy")]
     public async Task<IActionResult> UpdateEscalationPolicy([FromBody] EscalationPolicyRequest req)
     {
@@ -56,6 +57,7 @@ public class SettingsController : ControllerBase
         });
     }
 
+    [TejooWhatsApp.Security.RequirePage]
     [HttpPut("retention")]
     public async Task<IActionResult> UpdateRetention([FromBody] RetentionRequest req)
     {
@@ -67,6 +69,20 @@ public class SettingsController : ControllerBase
             ["conversation.retentionEnabled"] = req.Enabled ? "true" : "false",
             ["conversation.retentionDays"]    = req.Days.ToString()
         });
+        return Ok(new { success = true });
+    }
+
+    // ── AI Suggestions (global master switch, default ON) ──────────────────────
+
+    [HttpGet("ai-suggestions")]
+    public async Task<IActionResult> GetAiSuggestions()
+        => Ok(new { enabled = await _settings.IsAiSuggestionsEnabledAsync() });
+
+    [TejooWhatsApp.Security.RequirePage]
+    [HttpPut("ai-suggestions")]
+    public async Task<IActionResult> UpdateAiSuggestions([FromBody] AiSuggestionsRequest req)
+    {
+        await _settings.SetAsync(SystemSettingsRepository.AiSuggestionsEnabledKey, req.Enabled ? "true" : "false");
         return Ok(new { success = true });
     }
 
@@ -85,6 +101,7 @@ public class SettingsController : ControllerBase
         });
     }
 
+    [TejooWhatsApp.Security.RequirePage]
     [HttpPut("business-hours")]
     public async Task<IActionResult> UpdateBusinessHours([FromBody] BusinessHoursRequest req)
     {
@@ -111,6 +128,7 @@ public class SettingsController : ControllerBase
         });
     }
 
+    [TejooWhatsApp.Security.RequirePage]
     [HttpPut("auto-close")]
     public async Task<IActionResult> UpdateAutoClose([FromBody] AutoCloseRequest req)
     {
@@ -130,3 +148,4 @@ public record EscalationPolicyRequest(string Mode, int ConfidenceThreshold);
 public record BusinessHoursRequest(bool Enabled, string Start, string End, string Timezone);
 public record AutoCloseRequest(bool Enabled, int InactiveHours);
 public record RetentionRequest(bool Enabled, int Days);
+public record AiSuggestionsRequest(bool Enabled);

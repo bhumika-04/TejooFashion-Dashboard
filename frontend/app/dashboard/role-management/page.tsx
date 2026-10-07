@@ -26,9 +26,10 @@ const PAGES: { key: string; label: string }[] = [
   { key: 'webhook-logs',    label: 'Webhook Logs' },
   { key: 'system-health',   label: 'System Health' },
   { key: 'quick-replies',   label: 'Quick Replies' },
-  { key: 'notifications',   label: 'Notifications' },
+  { key: 'search',          label: 'Global Search' },
   { key: 'ai-prompts',      label: 'AI Prompts' },
-  { key: 'settings',        label: 'Settings' },
+  // Settings (own profile/password) and Notifications are always available to every role,
+  // so they aren't toggles here.
 ];
 
 type Matrix = Record<string, Record<string, boolean>>;

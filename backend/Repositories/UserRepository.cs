@@ -71,6 +71,7 @@ public class UserRepository
             UPDATE Users
             SET FullName = @FullName,
                 Email = @Email,
+                Phone = ISNULL(@Phone, ''),
                 PasswordHash = @PasswordHash,
                 Role = @Role,
                 IsActive = @IsActive,

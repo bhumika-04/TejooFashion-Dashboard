@@ -4,6 +4,7 @@ using TejooWhatsApp.Utilities;
 namespace TejooWhatsApp.Controllers;
 
 [Microsoft.AspNetCore.Authorization.Authorize]
+[TejooWhatsApp.Security.RequirePage("webhook-logs")]
 [ApiController]
 [Route("api/[controller]")]
 public class WebhookLogsController : ControllerBase
@@ -19,6 +20,8 @@ public class WebhookLogsController : ControllerBase
         [FromQuery] string? provider = null,
         [FromQuery] bool? success = null)
     {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 200);
         using var conn = _db.CreateConnection();
 
         var where = new List<string>();

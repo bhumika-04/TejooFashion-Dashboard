@@ -424,10 +424,30 @@ export default function ConversationsPage() {
     }
   };
 
+  // The newest N messages of the open chat (the API returns the latest ones); "Load earlier"
+  // raises N for long conversations.
+  const MESSAGE_PAGE = 200;
+  const messageLimitRef = useRef(MESSAGE_PAGE);
+  const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
+
+  const loadEarlierMessages = async () => {
+    if (!selectedConvRef.current) return;
+    messageLimitRef.current += MESSAGE_PAGE;
+    shouldScrollRef.current = false;
+    try {
+      const response = await messagesApi.getByConversation(selectedConvRef.current.id, messageLimitRef.current);
+      setMessages(response.data);
+      setHasEarlierMessages(response.data.length >= messageLimitRef.current);
+    } catch {
+      showToast('Failed to load earlier messages', 'error');
+    }
+  };
+
   const loadMessages = async (convId: number) => {
     try {
-      const response = await messagesApi.getByConversation(convId);
+      const response = await messagesApi.getByConversation(convId, messageLimitRef.current);
       setMessages(response.data);
+      setHasEarlierMessages(response.data.length >= messageLimitRef.current);
     } catch {
       showToast('Failed to load messages', 'error');
     }
@@ -508,6 +528,7 @@ export default function ConversationsPage() {
     setHasNewMessage(false);
     shouldScrollRef.current = true;
     isAtBottomRef.current = true;
+    messageLimitRef.current = MESSAGE_PAGE;
     loadMessages(conv.id);
     tagsApi.getByConversation(conv.id).then(r => setConvTags(r.data ?? [])).catch(() => {});
     // Load customer tags
@@ -844,20 +865,10 @@ export default function ConversationsPage() {
     searchDebounceRef.current = setTimeout(async () => {
       setSearching(true);
       try {
-        if (activeSessionId) {
-          // Session selected → search only within that session
-          const response = await conversationsApi.getAll(undefined, currentUserId, activeSessionId, 100, 0);
-          const q = value.trim().toLowerCase();
-          const filtered = (response.data as any[]).filter(c =>
-            c.customerPhone?.includes(q) ||
-            c.customerName?.toLowerCase().includes(q)
-          );
-          setSearchResults(filtered);
-        } else {
-          // All Sessions → global search across everything
-          const response = await conversationsApi.search(value.trim(), 50, currentUserId);
-          setSearchResults(response.data);
-        }
+        // Server-side search over ALL the caller's conversations — narrowed to the selected
+        // number when one is chosen (not just the 100 rows currently loaded).
+        const response = await conversationsApi.search(value.trim(), 50, currentUserId, activeSessionId);
+        setSearchResults(response.data);
       } catch {
         // silently ignore
       } finally {
@@ -903,25 +914,11 @@ export default function ConversationsPage() {
   const closedConvs = searchResults ? [] : filteredConversations.filter(c => c.status === 'Closed');
   const isClosed = selectedConv?.status === 'Closed';
 
-  // Collapse messages older than 30 days into the conversation summary (display-only — the messages
-  // stay in the DB; the retention job is what actually deletes them). Shows the summary banner + only
-  // the last 30 days of messages, which is what "messages before 30 days are summarised" looks like.
-  const RETENTION_DAYS = 30;
-  const olderCutoffTs = Date.now() - RETENTION_DAYS * 86_400_000;
-  const recentMessages = messages.filter((m: any) => {
-    const t = parseUTCDate(m.createdAt)?.getTime();
-    return t == null || t >= olderCutoffTs;
-  });
-  // Collapse the OLD part of a conversation into the summary only when:
-  //  - the messages were actually hard-deleted by retention (summaryArchivedAt), OR
-  //  - there is BOTH an old part AND a recent part loaded (a long, still-active chat).
-  // A conversation that is ENTIRELY older than 30 days (e.g. opened from Customers → View) must keep
-  // showing all its messages, or you couldn't read the archived chat at all.
-  const hasRecent = recentMessages.length > 0;
-  const hasOlderLoaded = messages.length > recentMessages.length;
-  const showOlderSummary =
-    !!summary?.summaryText && (!!summary?.summaryArchivedAt || (hasOlderLoaded && hasRecent));
-  const displayMessages = showOlderSummary ? recentMessages : messages;
+  // The "summary of older messages" banner appears only when the retention job has actually deleted
+  // older messages (summaryArchivedAt). Every message still in the database is shown — hiding them
+  // here would ignore the Data Retention setting and the "Load earlier messages" button.
+  const showOlderSummary = !!summary?.summaryText && !!summary?.summaryArchivedAt;
+  const displayMessages = messages;
 
   // ── Bulk multi-select helpers ──
   const toggleSelectId = (conv: any) => {
@@ -1679,10 +1676,16 @@ export default function ConversationsPage() {
                           </div>
                         )}
                         <p className="text-[10px] text-amber-600/80 mt-2">
-                          {summary.summaryArchivedAt
-                            ? `Messages before ${formatDate(summary.summaryArchivedAt)} were archived to this summary.`
-                            : `Messages older than ${RETENTION_DAYS} days are summarised here; the recent chat is shown below.`}
+                          Messages before {formatDate(summary.summaryArchivedAt)} were archived to this summary.
                         </p>
+                      </div>
+                    )}
+                    {hasEarlierMessages && (
+                      <div className="flex justify-center">
+                        <button onClick={loadEarlierMessages}
+                          className="text-xs font-medium text-emerald-700 bg-white border border-emerald-200 rounded-full px-3 py-1.5 hover:bg-emerald-50 shadow-sm">
+                          Load earlier messages
+                        </button>
                       </div>
                     )}
                     {displayMessages.length === 0 && !showOlderSummary ? (
@@ -2475,8 +2478,6 @@ export default function ConversationsPage() {
   );
 }
 
-const SLA_WARN_MINUTES = 10;
-const SLA_BREACH_MINUTES = 30;
 
 // ── Custom Audio Player ──────────────────────────────────────────────────────
 function AudioPlayer({ src, isInbound }: { src: string; isInbound: boolean }) {
@@ -2560,19 +2561,22 @@ function AudioPlayer({ src, isInbound }: { src: string; isInbound: boolean }) {
   );
 }
 
-function SlaTimer({ lastMessageAt, status }: { lastMessageAt: string | null; status: string }) {
+// Same rule as Overview → Overdue Replies: counts only while the customer is waiting for us (their
+// last message needs a reply), against this number's own SLA — amber at half, red once breached.
+function SlaTimer({ awaitingSince, slaMinutes, status }: { awaitingSince: string | null; slaMinutes?: number; status: string }) {
   const [, setTick] = useState(0);
   useEffect(() => {
-    if (status !== 'Open' && status !== 'Escalated') return;
+    if (!awaitingSince || (status !== 'Open' && status !== 'Escalated')) return;
     const t = setInterval(() => setTick(n => n + 1), 60_000);
     return () => clearInterval(t);
-  }, [status]);
+  }, [status, awaitingSince]);
 
-  if (!lastMessageAt || (status !== 'Open' && status !== 'Escalated')) return null;
-  const mins = Math.floor((Date.now() - (parseUTCDate(lastMessageAt)?.getTime() ?? Date.now())) / 60_000);
-  if (mins < SLA_WARN_MINUTES) return null;
+  if (!awaitingSince || (status !== 'Open' && status !== 'Escalated')) return null;
+  const sla = slaMinutes && slaMinutes > 0 ? slaMinutes : 30;
+  const mins = Math.floor((Date.now() - (parseUTCDate(awaitingSince)?.getTime() ?? Date.now())) / 60_000);
+  if (mins < sla / 2) return null;
 
-  const breached = mins >= SLA_BREACH_MINUTES;
+  const breached = mins >= sla;
   const label = mins >= 1440           // ≥ 24h → days + hours
     ? `${Math.floor(mins / 1440)}d ${Math.floor((mins % 1440) / 60)}h`
     : mins >= 60                        // ≥ 1h → hours + minutes
@@ -2647,7 +2651,7 @@ function ConversationItem({
               {conv.lastMessageAt ? getRelativeTime(conv.lastMessageAt) : 'No messages'}
             </p>
             <div className="flex items-center gap-1">
-              <SlaTimer lastMessageAt={conv.lastMessageAt} status={conv.status} />
+              <SlaTimer awaitingSince={conv.awaitingReplySince ?? null} slaMinutes={conv.slaMinutes} status={conv.status} />
               <Badge
                 variant={conv.status === 'Open' ? 'success' : conv.status === 'Escalated' ? 'warning' : 'secondary'}
                 className="text-xs"

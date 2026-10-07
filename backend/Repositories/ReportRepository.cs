@@ -1,3 +1,4 @@
+using TejooWhatsApp.AI;
 using TejooWhatsApp.Models.DTOs;
 using TejooWhatsApp.Utilities;
 
@@ -96,6 +97,25 @@ public class ReportRepository
             stats.AiHandlingRate = ((decimal)stats.TodayAiReplies / stats.TodayOutbound) * 100;
         }
 
+        // Agents who replied (any outbound) on their chats within the window.
+        stats.ActiveUsers = await conn.ExecuteScalarAsync<int>(@"
+            SELECT COUNT(DISTINCT c.AssignedUserId)
+            FROM Messages m
+            JOIN Conversations c ON c.Id = m.ConversationId
+            WHERE m.Direction = 'outbound' AND c.AssignedUserId > 0
+              AND CAST(DATEADD(MINUTE, 330, m.CreatedAt) AS DATE) BETWEEN @From AND @To
+              AND (@Uid IS NULL OR c.AssignedUserId = @Uid)", range);
+
+        // Average response time for customer messages received in the window (IST calendar days →
+        // UTC instants), using the same acknowledgement-aware samples as the Performance page.
+        var fromUtc = DateTime.Parse(from).AddMinutes(-330);
+        var toUtc = DateTime.Parse(to).AddDays(1).AddMinutes(-330);
+        var samples = (await GetResponseSamplesAsync(conn, fromUtc, toUtc))
+            .Where(s => assignedUserId == null || s.AssignedUserId == assignedUserId)
+            .ToList();
+        if (samples.Count > 0)
+            stats.AverageResponseTime = (decimal)(samples.Average(s => s.ResponseSeconds) / 60.0);
+
         return stats;
     }
 
@@ -113,16 +133,17 @@ public class ReportRepository
                 SELECT DATEADD(day, 1, [Date]) FROM DateSeries
                 WHERE [Date] < CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE)
             ),
+            -- Per IST day, all in MESSAGES (one unit throughout): every message sent or received,
+            -- and how many of the replies were AI vs human.
             Agg AS (
                 SELECT
-                    CAST(DATEADD(MINUTE, 330, c.CreatedAt) AS DATE) AS [Date],
+                    CAST(DATEADD(MINUTE, 330, m.CreatedAt) AS DATE) AS [Date],
                     COUNT(*) AS Total,
-                    COUNT(DISTINCT CASE WHEN m.IsAiGenerated = 1 THEN c.Id END) AS AiHandled,
-                    COUNT(DISTINCT CASE WHEN m.IsAiGenerated = 0 AND m.Direction = 'outbound' THEN c.Id END) AS HumanHandled
-                FROM Conversations c
-                LEFT JOIN Messages m ON c.Id = m.ConversationId
-                WHERE DATEADD(MINUTE, 330, c.CreatedAt) >= DATEADD(day, -(@Days - 1), CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE))
-                GROUP BY CAST(DATEADD(MINUTE, 330, c.CreatedAt) AS DATE)
+                    SUM(CASE WHEN m.Direction = 'outbound' AND m.IsAiGenerated = 1 THEN 1 ELSE 0 END) AS AiHandled,
+                    SUM(CASE WHEN m.Direction = 'outbound' AND m.IsAiGenerated = 0 THEN 1 ELSE 0 END) AS HumanHandled
+                FROM Messages m
+                WHERE DATEADD(MINUTE, 330, m.CreatedAt) >= DATEADD(day, -(@Days - 1), CAST(DATEADD(MINUTE, 330, GETUTCDATE()) AS DATE))
+                GROUP BY CAST(DATEADD(MINUTE, 330, m.CreatedAt) AS DATE)
             )
             SELECT ds.[Date] AS [Date],
                    ISNULL(a.Total, 0)        AS Total,
@@ -202,8 +223,7 @@ public class ReportRepository
                                     THEN c.Id END)                               AS ClosedInPeriod,
                 COUNT(DISTINCT esc.Id)                                            AS EscalationsReceived,
                 COUNT(DISTINCT CASE WHEN esc.Status = 'Resolved' THEN esc.Id END) AS EscalationsResolved,
-                -- resp/sla are one row per user (constant), so MAX just reads that value.
-                MAX(resp.AvgResponseSeconds) / 60.0                              AS AvgResponseTimeMinutes,
+                -- sla is one row per user (constant), so MAX just reads that value.
                 MAX(sla.SlaMet)                                                  AS SlaMet,
                 MAX(sla.SlaResponded)                                            AS SlaResponded
             FROM Users u
@@ -213,29 +233,6 @@ public class ReportRepository
             LEFT JOIN Escalations esc
                 ON esc.EscalatedToUserId = u.Id
                AND esc.EscalatedAt BETWEEN @From AND @To
-            LEFT JOIN (
-                -- Avg response time per user, collapsed to ONE row per user so the joins above
-                -- don't multiply the conversation counts (this fan-out was inflating 'Active').
-                SELECT perMsg.AssignedUserId,
-                       AVG(perMsg.ResponseSeconds) AS AvgResponseSeconds
-                FROM (
-                    -- For every inbound message in the period, seconds until the next outbound.
-                    SELECT
-                        c2.AssignedUserId,
-                        CAST(DATEDIFF(SECOND, m_in.CreatedAt, MIN(m_out.CreatedAt)) AS FLOAT) AS ResponseSeconds
-                    FROM Messages m_in
-                    JOIN Conversations c2 ON m_in.ConversationId = c2.Id
-                    JOIN Messages m_out
-                        ON m_out.ConversationId = m_in.ConversationId
-                       AND m_out.Direction = 'outbound'
-                       AND m_out.CreatedAt > m_in.CreatedAt
-                    WHERE m_in.Direction = 'inbound'
-                      AND m_in.CreatedAt BETWEEN @From AND @To
-                      AND c2.AssignedUserId > 0
-                    GROUP BY c2.AssignedUserId, m_in.Id, m_in.CreatedAt
-                ) perMsg
-                GROUP BY perMsg.AssignedUserId
-            ) resp ON resp.AssignedUserId = u.Id
             LEFT JOIN (
                 -- Per-agent first-response SLA: how many of their conversations were answered within
                 -- the CONVERSATION'S number SLA (WhatsAppSessions.SlaMinutes). One row per user.
@@ -270,8 +267,14 @@ public class ReportRepository
             GROUP BY u.Id, u.FullName, u.Role
             ORDER BY UniqueCustomers DESC";
 
-        var result = await conn.QueryAsync<AgentPerformanceDTO>(sql, new { From = from, To = to });
-        return result.ToList();
+        var result = (await conn.QueryAsync<AgentPerformanceDTO>(sql, new { From = from, To = to })).ToList();
+
+        var avgByUser = (await GetResponseSamplesAsync(conn, from, to))
+            .GroupBy(s => s.AssignedUserId)
+            .ToDictionary(g => g.Key, g => g.Average(s => s.ResponseSeconds) / 60.0);
+        foreach (var agent in result)
+            agent.AvgResponseTimeMinutes = avgByUser.TryGetValue(agent.UserId, out var mins) ? mins : null;
+        return result;
     }
 
     public async Task<List<HourlyDistributionDTO>> GetHourlyDistributionAsync(int days = 7)
@@ -518,28 +521,55 @@ public class ReportRepository
                      AND DATEADD(MINUTE,330,c.CreatedAt) <  @curStart) AS ConversationsHandledPrevious,
                 (SELECT COUNT(DISTINCT c.AssignedUserId) FROM Conversations c
                    WHERE c.AssignedUserId > 0
-                     AND DATEADD(MINUTE,330,c.CreatedAt) >= @curStart) AS AgentsActiveCurrent,
-                (SELECT AVG(rs.ResponseSeconds) / 60.0 FROM (
-                    SELECT CAST(DATEDIFF(SECOND, m_in.CreatedAt, MIN(m_out.CreatedAt)) AS FLOAT) AS ResponseSeconds
-                    FROM Messages m_in
-                    JOIN Conversations c2 ON m_in.ConversationId = c2.Id
-                    JOIN Messages m_out ON m_out.ConversationId = m_in.ConversationId
-                         AND m_out.Direction = 'outbound' AND m_out.CreatedAt > m_in.CreatedAt
-                    WHERE m_in.Direction = 'inbound' AND c2.AssignedUserId > 0
-                      AND DATEADD(MINUTE,330,m_in.CreatedAt) >= @curStart
-                    GROUP BY m_in.Id, m_in.CreatedAt) rs) AS AvgResponseMinutesCurrent,
-                (SELECT AVG(rs.ResponseSeconds) / 60.0 FROM (
-                    SELECT CAST(DATEDIFF(SECOND, m_in.CreatedAt, MIN(m_out.CreatedAt)) AS FLOAT) AS ResponseSeconds
-                    FROM Messages m_in
-                    JOIN Conversations c2 ON m_in.ConversationId = c2.Id
-                    JOIN Messages m_out ON m_out.ConversationId = m_in.ConversationId
-                         AND m_out.Direction = 'outbound' AND m_out.CreatedAt > m_in.CreatedAt
-                    WHERE m_in.Direction = 'inbound' AND c2.AssignedUserId > 0
-                      AND DATEADD(MINUTE,330,m_in.CreatedAt) >= @prevStart
-                      AND DATEADD(MINUTE,330,m_in.CreatedAt) <  @curStart
-                    GROUP BY m_in.Id, m_in.CreatedAt) rs) AS AvgResponseMinutesPrevious",
+                     AND DATEADD(MINUTE,330,c.CreatedAt) >= @curStart) AS AgentsActiveCurrent",
             new { Days = days }) ?? new PerformanceComparison();
+
+        var now = DateTime.UtcNow;
+        var samples = await GetResponseSamplesAsync(conn, now.AddDays(-2 * days), now);
+        var curStart = now.AddDays(-days);
+        static double? AvgMinutes(IEnumerable<ResponseSample> s)
+        {
+            var list = s.ToList();
+            return list.Count == 0 ? null : list.Average(x => x.ResponseSeconds) / 60.0;
+        }
+        result.AvgResponseMinutesCurrent  = AvgMinutes(samples.Where(s => s.InboundAt >= curStart));
+        result.AvgResponseMinutesPrevious = AvgMinutes(samples.Where(s => s.InboundAt < curStart));
         return result;
+    }
+
+    /// <summary>
+    /// For every customer message in [from, to] on an assigned chat, seconds until our next outbound.
+    /// Acknowledgements ("Ok", "Thanks" — AiHeuristics.IsAcknowledgement) are dropped: an "Ok"
+    /// followed by our next message a day later isn't a slow reply.
+    /// </summary>
+    private static async Task<List<ResponseSample>> GetResponseSamplesAsync(System.Data.Common.DbConnection conn, DateTime from, DateTime to)
+    {
+        var rows = await conn.QueryAsync<ResponseSample>(@"
+            SELECT c2.AssignedUserId, m_in.CreatedAt AS InboundAt, m_in.MessageType, LEFT(m_in.Content, 200) AS Content,
+                   CAST(DATEDIFF(SECOND, m_in.CreatedAt, nx.NextOutboundAt) AS FLOAT) AS ResponseSeconds
+            FROM Messages m_in
+            JOIN Conversations c2 ON c2.Id = m_in.ConversationId
+            CROSS APPLY (
+                SELECT MIN(m_out.CreatedAt) AS NextOutboundAt
+                FROM Messages m_out
+                WHERE m_out.ConversationId = m_in.ConversationId
+                  AND m_out.Direction = 'outbound' AND m_out.CreatedAt > m_in.CreatedAt
+            ) nx
+            WHERE m_in.Direction = 'inbound'
+              AND m_in.CreatedAt BETWEEN @From AND @To
+              AND c2.AssignedUserId > 0
+              AND nx.NextOutboundAt IS NOT NULL",
+            new { From = from, To = to });
+        return rows.Where(r => !AiHeuristics.IsAcknowledgement(r.Content, r.MessageType)).ToList();
+    }
+
+    private class ResponseSample
+    {
+        public int AssignedUserId { get; set; }
+        public DateTime InboundAt { get; set; }
+        public string? MessageType { get; set; }
+        public string? Content { get; set; }
+        public double ResponseSeconds { get; set; }
     }
 
     /// <summary>Resolution + escalation analytics over the last N days.</summary>
@@ -617,8 +647,11 @@ public class ReportRepository
         // @Uid scopes to the CRR's own session(s) for a personal Overview.
         var sql = @"
             SELECT
+                ws.Id AS SessionId,
                 ws.PhoneNumber,
                 ws.DisplayName,
+                u.FullName AS AssignedUserName,
+                ws.IsConnected,
                 (SELECT COUNT(*) FROM Messages m
                    INNER JOIN Conversations c2 ON c2.Id = m.ConversationId
                    WHERE c2.SessionId = ws.Id
@@ -627,10 +660,11 @@ public class ReportRepository
                 COUNT(DISTINCT c.Id) as ConversationCount,
                 ws.LastActiveAt as LastActive
             FROM WhatsAppSessions ws
+            LEFT JOIN Users u ON u.Id = ws.AssignedUserId
             LEFT JOIN Conversations c ON ws.Id = c.SessionId
             WHERE ws.IsActive = 1
               AND (@Uid IS NULL OR ws.AssignedUserId = @Uid)
-            GROUP BY ws.Id, ws.PhoneNumber, ws.DisplayName, ws.LastActiveAt
+            GROUP BY ws.Id, ws.PhoneNumber, ws.DisplayName, u.FullName, ws.IsConnected, ws.LastActiveAt
             ORDER BY ws.LastActiveAt DESC";
 
         var result = await conn.QueryAsync<SessionActivityDTO>(sql, new { Uid = assignedUserId });

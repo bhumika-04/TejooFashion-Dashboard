@@ -8,7 +8,7 @@ import { AlertTriangle, CheckCircle, Clock, TrendingUp, Settings, Edit, Trash2, 
 import AutoTagManager from '@/components/AutoTagManager';
 import { useRouter } from 'next/navigation';
 import { FAB } from '@/components/ui/fab';
-import { formatDate } from '@/lib/utils';
+import { formatDate, parseUTCDate } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFooter } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/toast';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -94,14 +94,14 @@ export default function EscalationsPage() {
   const resolvedToday = escalations.filter(e => {
     if (e.status !== 'Resolved' || !e.resolvedAt) return false;
     const today = new Date();
-    const resolvedDate = new Date(e.resolvedAt);
-    return resolvedDate.toDateString() === today.toDateString();
+    const resolvedDate = parseUTCDate(e.resolvedAt);
+    return resolvedDate?.toDateString() === today.toDateString();
   }).length;
   const resolvedWithTimes = escalations.filter(e => e.status === 'Resolved' && e.resolvedAt && e.escalatedAt);
   const avgResolutionTime = resolvedWithTimes.length > 0
     ? Math.round(
         resolvedWithTimes.reduce((sum, e) => {
-          const mins = (new Date(e.resolvedAt).getTime() - new Date(e.escalatedAt).getTime()) / 60000;
+          const mins = ((parseUTCDate(e.resolvedAt)?.getTime() ?? 0) - (parseUTCDate(e.escalatedAt)?.getTime() ?? 0)) / 60000;
           return sum + mins;
         }, 0) / resolvedWithTimes.length
       )
@@ -434,7 +434,8 @@ export default function EscalationsPage() {
     const timeout = level === 1 ? policy.policy.crrTimeoutMinutes
                   : level === 2 ? policy.policy.managerTimeoutMinutes
                   : policy.policy.hodTimeoutMinutes;
-    const elapsed = Math.floor((Date.now() - new Date(esc.lastEscalatedAt ?? esc.escalatedAt).getTime()) / 60_000);
+    // Server times are UTC without a 'Z' — parse as UTC, or the countdown runs 5h30m ahead.
+    const elapsed = Math.floor((Date.now() - (parseUTCDate(esc.lastEscalatedAt ?? esc.escalatedAt)?.getTime() ?? Date.now())) / 60_000);
     const remaining = timeout - elapsed;
     return { remaining, timeout, elapsed, breached: remaining <= 0 };
   };

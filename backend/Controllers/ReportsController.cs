@@ -21,15 +21,13 @@ public class ReportsController : ControllerBase
 
     // CRR/agents only ever see their OWN data (personal Overview). Resolved from the JWT so it
     // can't be bypassed by a client-supplied param. Null = privileged role (company-wide view).
-    private int? ScopeUserId()
-    {
-        var role = User.FindFirst(ClaimTypes.Role)?.Value ?? "";
-        if (role is not ("CRR" or "AGENT")) return null;
+    private int? ScopeUserId() =>
+        TejooWhatsApp.Security.PageAccessService.IsAgentRole(User)
+            ? TejooWhatsApp.Security.PageAccessService.UserIdOf(User) ?? -1   // -1 = matches nothing, fail closed
+            : null;
 
-        var idStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                 ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-        return int.TryParse(idStr, out var id) ? id : -1; // -1 = matches nothing, fail closed
-    }
+    /// <summary>Midnight today in India (IST, UTC+5:30), as a UTC instant — "today" everywhere else in the app.</summary>
+    private static DateTime IstTodayStartUtc() => DateTime.UtcNow.AddMinutes(330).Date.AddMinutes(-330);
 
     // from/to are IST calendar dates (yyyy-MM-dd); omitted → today. Scopes the historical
     // dashboard metrics (conversations, messages, AI rate) to the selected range.
@@ -40,6 +38,7 @@ public class ReportsController : ControllerBase
         return Ok(stats);
     }
 
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("conversation-trends")]
     public async Task<IActionResult> GetConversationTrends([FromQuery] int days = 7)
     {
@@ -54,6 +53,7 @@ public class ReportsController : ControllerBase
         return Ok(activity);
     }
 
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("agent-stats")]
     public async Task<IActionResult> GetAgentStats([FromQuery] int days = 36500)
     {
@@ -65,6 +65,7 @@ public class ReportsController : ControllerBase
     /// Per-agent performance for a period: today | week | month
     /// Returns real avg response time computed from message timestamps.
     /// </summary>
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("performance")]
     public async Task<IActionResult> GetPerformance([FromQuery] string period = "today")
     {
@@ -73,20 +74,21 @@ public class ReportsController : ControllerBase
         {
             "week"  => now.AddDays(-7),
             "month" => now.AddDays(-30),
-            _       => now.Date
+            _       => IstTodayStartUtc()
         };
         var stats = await _reportRepo.GetPerformanceStatsAsync(from, now);
         return Ok(stats);
     }
 
     // AI copilot acceptance analytics: how often CRRs used the AI drafts (as-is / edited / dismissed).
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("ai-suggestions")]
     public async Task<IActionResult> GetAiSuggestionStats([FromQuery] string period = "week")
     {
         var now = DateTime.UtcNow;
         var from = period switch
         {
-            "today" => now.Date,
+            "today" => IstTodayStartUtc(),
             "month" => now.AddDays(-30),
             _       => now.AddDays(-7)
         };
@@ -95,25 +97,29 @@ public class ReportsController : ControllerBase
     }
 
     // Per-agent AI-copilot acceptance breakdown.
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("ai-suggestions/by-agent")]
     public async Task<IActionResult> GetAiSuggestionsByAgent([FromQuery] string period = "week")
     {
         var now = DateTime.UtcNow;
-        var from = period switch { "today" => now.Date, "month" => now.AddDays(-30), _ => now.AddDays(-7) };
+        var from = period switch { "today" => IstTodayStartUtc(), "month" => now.AddDays(-30), _ => now.AddDays(-7) };
         return Ok(await _aiSuggestions.GetAcceptanceByAgentAsync(from, now));
     }
 
     // Customer sentiment analytics (distribution + daily trend) from conversation summaries.
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("sentiment")]
     public async Task<IActionResult> GetSentiment([FromQuery] int days = 7)
         => Ok(await _reportRepo.GetSentimentAnalyticsAsync(days));
 
     // Daily average first-response time (minutes) trend over the period.
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("response-time-trend")]
     public async Task<IActionResult> GetResponseTimeTrend([FromQuery] int days = 7)
         => Ok(await _reportRepo.GetResponseTimeTrendAsync(days));
 
     // Team KPI trends: current window vs equal-length previous window (real deltas, no hardcoding).
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("performance-summary")]
     public async Task<IActionResult> GetPerformanceSummary([FromQuery] string period = "today")
     {
@@ -122,6 +128,7 @@ public class ReportsController : ControllerBase
         return Ok(data);
     }
 
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("hourly-distribution")]
     public async Task<IActionResult> GetHourlyDistribution([FromQuery] int days = 7)
     {
@@ -130,6 +137,7 @@ public class ReportsController : ControllerBase
     }
 
     // First-response-time SLA: overall + per-agent breach breakdown
+    [TejooWhatsApp.Security.RequirePage("reports", "performance", "sessions")]
     [HttpGet("response-sla")]
     public async Task<IActionResult> GetResponseSla([FromQuery] int days = 7, [FromQuery] int slaMinutes = 30)
     {
@@ -138,6 +146,7 @@ public class ReportsController : ControllerBase
     }
 
     // Current vs previous window comparison for headline KPIs
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("period-comparison")]
     public async Task<IActionResult> GetPeriodComparison([FromQuery] int days = 7)
     {
@@ -146,6 +155,7 @@ public class ReportsController : ControllerBase
     }
 
     // Resolution + escalation analytics over the period
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("resolution")]
     public async Task<IActionResult> GetResolution([FromQuery] int days = 7)
     {
@@ -154,6 +164,7 @@ public class ReportsController : ControllerBase
     }
 
     // Tag distribution over the period — type=conversation|customer
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("tag-distribution")]
     public async Task<IActionResult> GetTagDistribution([FromQuery] string type = "conversation", [FromQuery] int days = 7)
     {
@@ -162,6 +173,7 @@ public class ReportsController : ControllerBase
         return Ok(data);
     }
 
+    [TejooWhatsApp.Security.RequirePage("reports", "performance")]
     [HttpGet("top-customers")]
     public async Task<IActionResult> GetTopCustomers([FromQuery] int days = 7, [FromQuery] int top = 10)
     {

@@ -25,6 +25,15 @@ public class SystemSettingsRepository
         return rows.ToDictionary(r => r.Key, r => r.Value);
     }
 
+    public const string AiSuggestionsEnabledKey = "ai.suggestionsEnabled";
+
+    /// <summary>Global master switch for AI reply suggestions (copilot drafts). Default ON.</summary>
+    public async Task<bool> IsAiSuggestionsEnabledAsync()
+    {
+        var v = await GetAsync(AiSuggestionsEnabledKey);
+        return !string.Equals(v, "false", StringComparison.OrdinalIgnoreCase);
+    }
+
     public async Task SetAsync(string key, string value, string? updatedBy = null)
     {
         using var conn = _db.CreateConnection();

@@ -88,9 +88,11 @@ export default function DashboardPage() {
     { name: 'AI Replies', value: stats?.todayAiReplies || 0, color: '#10b981' },
   ];
 
+  // Both bars are REPLIES (outbound) — AI-sent vs human-sent — so they share one denominator.
+  const totalReplies = stats?.todayOutbound || 0;
   const aiPerformanceData = [
     { name: 'AI Handled', value: stats?.todayAiReplies || 0 },
-    { name: 'Human Handled', value: (stats?.todayMessages || 0) - (stats?.todayAiReplies || 0) },
+    { name: 'Human Handled', value: Math.max(0, totalReplies - (stats?.todayAiReplies || 0)) },
   ];
 
   return (
@@ -132,7 +134,7 @@ export default function DashboardPage() {
             value={stats?.activeUsers || 0}
             icon={Users}
             theme="purple"
-            subtitleText="Agents online"
+            subtitleText="Agents who replied"
             // Fill the trailing gap: full row on 2-col mobile, spans the last 2 of 3 on md, single on xl(5-col)
             className="col-span-2 xl:col-span-1"
           />
@@ -343,7 +345,7 @@ export default function DashboardPage() {
           <CardContent className="pt-6">
             <div className="space-y-5">
               {aiPerformanceData.map((item) => {
-                const pct = Math.min(100, (item.value / (stats?.todayMessages || 1)) * 100);
+                const pct = Math.min(100, (item.value / (totalReplies || 1)) * 100);
                 return (
                   <div key={item.name}>
                     <div className="flex justify-between text-sm mb-2">

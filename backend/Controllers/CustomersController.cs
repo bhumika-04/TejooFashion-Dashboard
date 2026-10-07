@@ -13,26 +13,37 @@ public class CustomersController : ControllerBase
     private readonly CustomerRepository _customers;
     private readonly ConversationRepository _conversations;
     private readonly TagRepository _tags;
+    private readonly TejooWhatsApp.Security.VisibilityService _visibility;
 
-    public CustomersController(CustomerRepository customers, ConversationRepository conversations, TagRepository tags)
+    public CustomersController(CustomerRepository customers, ConversationRepository conversations, TagRepository tags,
+        TejooWhatsApp.Security.VisibilityService visibility)
     {
         _customers = customers;
         _conversations = conversations;
         _tags = tags;
+        _visibility = visibility;
+    }
+
+    /// <summary>
+    /// Same rule as the customer list: CRR/agents may only open customers they have a conversation
+    /// with; other roles see every customer. Returns the customer, or null when hidden/missing.
+    /// </summary>
+    private async Task<Customer?> VisibleCustomerAsync(Customer? customer)
+    {
+        if (customer == null) return null;
+        var scope = ScopeUserId();
+        if (scope == null) return customer;
+        var convs = await _conversations.GetByCustomerPhoneAsync(customer.Phone);
+        return convs.Any(c => c.AssignedUserId == scope) ? customer : null;
     }
 
     // CRR/agents may only see customers tied to conversations assigned to them. Enforced from the
     // JWT (not a client-supplied param) so it can't be bypassed by calling the API directly.
     // Returns null for privileged roles (no scoping = see all).
-    private int? ScopeUserId()
-    {
-        var role = User.FindFirst(ClaimTypes.Role)?.Value ?? "";
-        if (role is not ("CRR" or "AGENT")) return null;
-
-        var idStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                 ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-        return int.TryParse(idStr, out var id) ? id : -1; // -1 = matches nothing, fail closed
-    }
+    private int? ScopeUserId() =>
+        TejooWhatsApp.Security.PageAccessService.IsAgentRole(User)
+            ? TejooWhatsApp.Security.PageAccessService.UserIdOf(User) ?? -1   // -1 = matches nothing, fail closed
+            : null;
 
     // GET /api/customers/stats
     [HttpGet("stats")]
@@ -64,7 +75,7 @@ public class CustomersController : ControllerBase
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(int id)
     {
-        var customer = await _customers.GetByIdAsync(id);
+        var customer = await VisibleCustomerAsync(await _customers.GetByIdAsync(id));
         if (customer == null) return NotFound();
         return Ok(customer);
     }
@@ -73,7 +84,7 @@ public class CustomersController : ControllerBase
     [HttpGet("phone/{phone}")]
     public async Task<IActionResult> GetByPhone(string phone)
     {
-        var customer = await _customers.GetByPhoneAsync(phone);
+        var customer = await VisibleCustomerAsync(await _customers.GetByPhoneAsync(phone));
         if (customer == null) return NotFound();
         return Ok(customer);
     }
@@ -82,10 +93,13 @@ public class CustomersController : ControllerBase
     [HttpGet("{id}/conversations")]
     public async Task<IActionResult> GetConversations(int id)
     {
-        var customer = await _customers.GetByIdAsync(id);
+        var customer = await VisibleCustomerAsync(await _customers.GetByIdAsync(id));
         if (customer == null) return NotFound();
 
-        var conversations = await _conversations.GetByCustomerPhoneAsync(customer.Phone);
+        // Only the conversations the caller may open (same rule as the Conversations page).
+        var visible = await _visibility.VisibleUserIdsAsync(User);
+        var conversations = (await _conversations.GetByCustomerPhoneAsync(customer.Phone))
+            .Where(c => visible == null || visible.Contains(c.AssignedUserId));
         return Ok(conversations);
     }
 
@@ -93,7 +107,7 @@ public class CustomersController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateCustomerRequest req)
     {
-        var customer = await _customers.GetByIdAsync(id);
+        var customer = await VisibleCustomerAsync(await _customers.GetByIdAsync(id));
         if (customer == null) return NotFound();
 
         await _customers.UpdateAsync(id, req.Name, req.Email, req.Notes);
@@ -104,6 +118,7 @@ public class CustomersController : ControllerBase
     [HttpGet("{id}/tags")]
     public async Task<IActionResult> GetTags(int id)
     {
+        if (await VisibleCustomerAsync(await _customers.GetByIdAsync(id)) == null) return NotFound();
         var tags = await _tags.GetByCustomerAsync(id);
         return Ok(tags);
     }
@@ -112,6 +127,7 @@ public class CustomersController : ControllerBase
     [HttpPost("{id}/tags/{tagId}")]
     public async Task<IActionResult> AddTag(int id, int tagId)
     {
+        if (await VisibleCustomerAsync(await _customers.GetByIdAsync(id)) == null) return NotFound();
         await _tags.AddToCustomerAsync(id, tagId);
         return Ok(new { success = true });
     }
@@ -120,6 +136,7 @@ public class CustomersController : ControllerBase
     [HttpDelete("{id}/tags/{tagId}")]
     public async Task<IActionResult> RemoveTag(int id, int tagId)
     {
+        if (await VisibleCustomerAsync(await _customers.GetByIdAsync(id)) == null) return NotFound();
         await _tags.RemoveFromCustomerAsync(id, tagId);
         return Ok(new { success = true });
     }
@@ -136,6 +153,7 @@ public class CustomersController : ControllerBase
         var affected = 0;
         foreach (var id in req.CustomerIds.Distinct())
         {
+            if (await VisibleCustomerAsync(await _customers.GetByIdAsync(id)) == null) continue;
             try
             {
                 if (string.Equals(req.Action, "remove", StringComparison.OrdinalIgnoreCase))

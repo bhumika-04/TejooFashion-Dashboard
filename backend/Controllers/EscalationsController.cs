@@ -12,11 +12,31 @@ public class EscalationsController : ControllerBase
 {
     private readonly EscalationService _escalationService;
     private readonly AuditLogRepository _auditRepo;
+    private readonly EscalationRepository _escalationRepo;
+    private readonly TejooWhatsApp.Security.PageAccessService _pageAccess;
+    private readonly TejooWhatsApp.Security.VisibilityService _visibility;
 
-    public EscalationsController(EscalationService escalationService, AuditLogRepository auditRepo)
+    public EscalationsController(EscalationService escalationService, AuditLogRepository auditRepo,
+        EscalationRepository escalationRepo, TejooWhatsApp.Security.PageAccessService pageAccess,
+        TejooWhatsApp.Security.VisibilityService visibility)
     {
         _escalationService = escalationService;
         _auditRepo = auditRepo;
+        _escalationRepo = escalationRepo;
+        _pageAccess = pageAccess;
+        _visibility = visibility;
+    }
+
+    private Task<bool> CanManageEscalationsAsync() => _pageAccess.CanAccessAnyAsync(User, new[] { "escalations" });
+
+    /// <summary>Escalation managers may act on any escalation; everyone else only on ones routed to them.</summary>
+    private async Task<IActionResult?> DenyUnlessOwnerOrManagerAsync(int escalationId)
+    {
+        if (await CanManageEscalationsAsync()) return null;
+        var esc = await _escalationRepo.GetByIdAsync(escalationId);
+        return esc != null && esc.EscalatedToUserId == TejooWhatsApp.Security.PageAccessService.UserIdOf(User)
+            ? null
+            : NotFound(new { error = "Escalation not found" });
     }
 
     private (int Id, string Name) GetCaller()
@@ -31,11 +51,15 @@ public class EscalationsController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] string? status = null, [FromQuery] int? escalatedToUserId = null)
     {
+        // Without Escalations access you only see escalations routed to you.
+        if (!await CanManageEscalationsAsync())
+            escalatedToUserId = TejooWhatsApp.Security.PageAccessService.UserIdOf(User) ?? -1;
         var escalations = await _escalationService.GetAllEscalationsAsync(status, escalatedToUserId);
         return Ok(escalations);
     }
 
     [HttpPost]
+    [TejooWhatsApp.Security.RequirePage("escalations")]
     public async Task<IActionResult> Create([FromBody] CreateEscalationRequest request)
     {
         if (request.ConversationId <= 0 || request.EscalatedToUserId <= 0)
@@ -64,6 +88,9 @@ public class EscalationsController : ControllerBase
     [HttpPost("conversation/{conversationId}")]
     public async Task<IActionResult> EscalateConversation(int conversationId, [FromQuery] string? reason = null, [FromQuery] string priority = "Normal")
     {
+        if (!await _visibility.CanAccessConversationAsync(User, conversationId))
+            return NotFound(new { error = "Conversation not found" });
+
         var (callerId, callerName) = GetCaller();
         var (escalation, targetName, error) = await _escalationService.EscalateConversationAsync(
             conversationId, callerId > 0 ? callerId : (int?)null, reason, priority);
@@ -82,6 +109,7 @@ public class EscalationsController : ControllerBase
     [HttpPatch("{id}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateEscalationRequest request)
     {
+        if (await DenyUnlessOwnerOrManagerAsync(id) is { } denied) return denied;
         if (string.IsNullOrWhiteSpace(request.Status))
             return BadRequest(new { error = "Status is required" });
 
@@ -99,6 +127,7 @@ public class EscalationsController : ControllerBase
     [HttpPatch("{id}/reassign")]
     public async Task<IActionResult> Reassign(int id, [FromBody] ReassignEscalationRequest request)
     {
+        if (await DenyUnlessOwnerOrManagerAsync(id) is { } denied) return denied;
         if (request.NewUserId <= 0) return BadRequest(new { error = "NewUserId is required" });
 
         var (ok, targetName, error) = await _escalationService.ReassignAsync(id, request.NewUserId);
@@ -115,6 +144,7 @@ public class EscalationsController : ControllerBase
     [HttpPost("{id}/resolve")]
     public async Task<IActionResult> Resolve(int id, [FromBody] UpdateEscalationRequest request)
     {
+        if (await DenyUnlessOwnerOrManagerAsync(id) is { } denied) return denied;
         var result = await _escalationService.ResolveEscalationAsync(id, request.ResolutionNotes);
         if (!result)
         {

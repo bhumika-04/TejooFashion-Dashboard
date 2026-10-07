@@ -106,7 +106,7 @@ export default function SessionsPage() {
         phoneNumber: data.phoneNumber,
         assignedUserId: data.assignedUserId,
         interaktApiKey: data.provider === 'Interakt' ? data.apiKey : undefined,
-        metaPhoneNumberId: data.provider === 'Meta' ? data.apiKey : undefined,
+        metaPhoneNumberId: data.provider === 'Meta' ? data.metaPhoneNumberId : undefined,
         metaAccessToken: data.provider === 'Meta' ? data.apiKey : undefined,
         autoReplyEnabled: data.autoReplyEnabled,
         aiMode: data.aiMode,

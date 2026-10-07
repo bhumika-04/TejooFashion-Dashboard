@@ -70,14 +70,14 @@ public class AiSuggestionRepository
     }
 
     /// <summary>Record the CRR's action (Sent | Edited | Dismissed) on a pending suggestion.</summary>
-    public async Task<bool> ResolveAsync(int id, string status, int? actedByUserId)
+    public async Task<bool> ResolveAsync(int id, int conversationId, string status, int? actedByUserId)
     {
         using var conn = _db.CreateConnection();
         var rows = await conn.ExecuteAsync(@"
             UPDATE AiSuggestions
             SET Status = @Status, ActedByUserId = @ActedByUserId, ActedAt = SYSUTCDATETIME()
-            WHERE Id = @Id AND Status = 'Pending'",
-            new { Id = id, Status = status, ActedByUserId = actedByUserId });
+            WHERE Id = @Id AND ConversationId = @ConversationId AND Status = 'Pending'",
+            new { Id = id, ConversationId = conversationId, Status = status, ActedByUserId = actedByUserId });
         return rows > 0;
     }
 }

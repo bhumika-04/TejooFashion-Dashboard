@@ -18,7 +18,8 @@ public class WhatsAppSessionsController : ControllerBase
     private readonly ILogger<WhatsAppSessionsController> _logger;
     private readonly WhatsAppOrchestrator _orchestrator;
     private readonly ConversationService _conversationService;
-    private readonly ITeamMemberRepository _teamMembers;
+    private readonly TejooWhatsApp.Security.VisibilityService _visibility;
+    private readonly TejooWhatsApp.Security.PageAccessService _pageAccess;
     private readonly string _interaktBaseUrl;
     private readonly string _metaGraphBaseUrl;
 
@@ -31,7 +32,8 @@ public class WhatsAppSessionsController : ControllerBase
         IConfiguration configuration,
         WhatsAppOrchestrator orchestrator,
         ConversationService conversationService,
-        ITeamMemberRepository teamMembers)
+        TejooWhatsApp.Security.VisibilityService visibility,
+        TejooWhatsApp.Security.PageAccessService pageAccess)
     {
         _sessionRepo = sessionRepo;
         _userRepo = userRepo;
@@ -40,39 +42,16 @@ public class WhatsAppSessionsController : ControllerBase
         _logger = logger;
         _orchestrator = orchestrator;
         _conversationService = conversationService;
-        _teamMembers = teamMembers;
+        _visibility = visibility;
+        _pageAccess = pageAccess;
         _interaktBaseUrl = configuration["ExternalApis:InteraktBaseUrl"] ?? "https://api.interakt.ai";
         _metaGraphBaseUrl = configuration["ExternalApis:MetaGraphBaseUrl"] ?? "https://graph.facebook.com";
     }
 
-    /// <summary>Assigned-user ids the caller may see (null = all, Admin only): CRR/Agent → own,
-    /// Manager/HOD → own team(s), Admin → all. Mirrors the conversation visibility rule. </summary>
-    private async Task<List<int>?> ResolveVisibleAsync(int? requested)
-    {
-        var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value ?? "";
-        var uid = GetCaller().Id;
+    private Task<List<int>?> ResolveVisibleAsync(int? requested) => _visibility.VisibleUserIdsAsync(User, requested);
 
-        List<int>? visible;
-        if (role.Equals("Admin", StringComparison.OrdinalIgnoreCase))
-            visible = null;
-        else if (role.Equals("CRR", StringComparison.OrdinalIgnoreCase) || role.Equals("Agent", StringComparison.OrdinalIgnoreCase))
-            visible = new List<int> { uid };
-        else
-        {
-            var ids = new HashSet<int> { uid };
-            foreach (var membership in await _teamMembers.GetMembershipsByUserAsync(uid))
-                foreach (var member in await _teamMembers.GetMembersByTeamAsync(membership.TeamId))
-                    ids.Add(member.UserId);
-            visible = ids.ToList();
-        }
-
-        if (requested.HasValue)
-        {
-            if (visible == null) return new List<int> { requested.Value };
-            return visible.Contains(requested.Value) ? new List<int> { requested.Value } : visible;
-        }
-        return visible;
-    }
+    /// <summary>API keys go only to people who can edit numbers (Sessions access) — never to agents.</summary>
+    private Task<bool> CanManageSessionsAsync() => _pageAccess.CanAccessAnyAsync(User, new[] { "sessions" });
 
     private (int Id, string Name) GetCaller()
     {
@@ -83,6 +62,7 @@ public class WhatsAppSessionsController : ControllerBase
         return (id, name);
     }
 
+    [TejooWhatsApp.Security.RequirePage("sessions")]
     [HttpPost("test-connection")]
     public async Task<IActionResult> TestConnection([FromBody] TestConnectionRequest request)
     {
@@ -146,16 +126,11 @@ public class WhatsAppSessionsController : ControllerBase
             }
             else if (request.Provider == "Meta")
             {
-                // Validate Meta: Phone Number ID, Business Account ID, Access Token
+                // Validate Meta: Phone Number ID + Access Token (the test call below needs only these)
                 if (string.IsNullOrEmpty(request.MetaPhoneNumberId))
                 {
                     _logger.LogWarning("Meta test failed: Phone Number ID is missing");
                     return Ok(new { success = false, message = "Phone Number ID is required for Meta provider" });
-                }
-                if (string.IsNullOrEmpty(request.MetaBusinessAccountId))
-                {
-                    _logger.LogWarning("Meta test failed: Business Account ID is missing");
-                    return Ok(new { success = false, message = "Business Account ID is required for Meta provider" });
                 }
                 if (string.IsNullOrEmpty(request.MetaAccessToken))
                 {
@@ -163,8 +138,7 @@ public class WhatsAppSessionsController : ControllerBase
                     return Ok(new { success = false, message = "Access Token is required for Meta provider" });
                 }
 
-                _logger.LogInformation("Testing Meta WhatsApp API connection - Phone Number ID: {PhoneNumberId}, Business Account ID: {BusinessAccountId}",
-                    request.MetaPhoneNumberId, request.MetaBusinessAccountId);
+                _logger.LogInformation("Testing Meta WhatsApp API connection - Phone Number ID: {PhoneNumberId}", request.MetaPhoneNumberId);
 
                 // Test Meta API by verifying the phone number ID
                 var testUrl = $"{_metaGraphBaseUrl}/v18.0/{request.MetaPhoneNumberId}";
@@ -214,6 +188,7 @@ public class WhatsAppSessionsController : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] bool? isActive = null, [FromQuery] int? assignedUserId = null)
     {
         var sessions = await _sessionRepo.GetAllWithUserAsync(isActive, await ResolveVisibleAsync(assignedUserId));
+        var showKeys = await CanManageSessionsAsync();
         var dtos = sessions.Select(session => new WhatsAppSessionDTO
         {
             Id = session.Id,
@@ -234,7 +209,8 @@ public class WhatsAppSessionsController : ControllerBase
             LastActiveAt = session.LastActiveAt,
             LastInboundAt = session.LastInboundAt,
             CreatedAt = session.CreatedAt,
-            ApiKey = session.Provider == "Interakt" ? session.InteraktApiKey : session.MetaAccessToken,
+            ApiKey = !showKeys ? null : session.Provider == "Interakt" ? session.InteraktApiKey : session.MetaAccessToken,
+            MetaPhoneNumberId = showKeys ? session.MetaPhoneNumberId : null,
         }).ToList();
 
         return Ok(dtos);
@@ -244,7 +220,8 @@ public class WhatsAppSessionsController : ControllerBase
     public async Task<IActionResult> GetById(int id)
     {
         var session = await _sessionRepo.GetByIdAsync(id);
-        if (session == null)
+        var canManage = await CanManageSessionsAsync();
+        if (session == null || (!canManage && !await _visibility.CanSeeAssigneeAsync(User, session.AssignedUserId)))
         {
             return NotFound(new { error = "Session not found" });
         }
@@ -267,10 +244,12 @@ public class WhatsAppSessionsController : ControllerBase
             MessagesToday = session.MessagesToday,
             LastActiveAt = session.LastActiveAt,
             CreatedAt = session.CreatedAt,
-            ApiKey = session.Provider == "Interakt" ? session.InteraktApiKey : session.MetaAccessToken,
+            ApiKey = !canManage ? null : session.Provider == "Interakt" ? session.InteraktApiKey : session.MetaAccessToken,
+            MetaPhoneNumberId = canManage ? session.MetaPhoneNumberId : null,
         });
     }
 
+    [TejooWhatsApp.Security.RequirePage("sessions")]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateSessionRequest request)
     {
@@ -289,7 +268,9 @@ public class WhatsAppSessionsController : ControllerBase
             MetaAccessToken = request.MetaAccessToken,
             IsConnected = false,
             IsActive = true,
-            AutoReplyEnabled = true,
+            AutoReplyEnabled = request.AutoReplyEnabled ?? true,
+            AiMode = NormalizeAiMode(request.AiMode) ?? "suggest",
+            SlaMinutes = Math.Clamp(request.SlaMinutes ?? 30, 1, 1440),
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
@@ -352,6 +333,7 @@ public class WhatsAppSessionsController : ControllerBase
         }
     }
 
+    [TejooWhatsApp.Security.RequirePage("sessions")]
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateSessionRequest request)
     {
@@ -361,23 +343,30 @@ public class WhatsAppSessionsController : ControllerBase
             return NotFound(new { error = "Session not found" });
         }
 
+        if (!string.IsNullOrWhiteSpace(request.PhoneNumber)) session.PhoneNumber = request.PhoneNumber.Trim();
+        if (request.Provider is "Interakt" or "Meta") session.Provider = request.Provider;
         if (request.AssignedUserId.HasValue) session.AssignedUserId = request.AssignedUserId.Value;
         if (request.IsActive.HasValue) session.IsActive = request.IsActive.Value;
         if (request.IsConnected.HasValue) session.IsConnected = request.IsConnected.Value;
         if (request.AutoReplyEnabled.HasValue) session.AutoReplyEnabled = request.AutoReplyEnabled.Value;
-        if (!string.IsNullOrWhiteSpace(request.AiMode))
-        {
-            var m = request.AiMode.Trim().ToLowerInvariant();
-            if (m is "off" or "suggest" or "auto") session.AiMode = m;
-        }
+        if (NormalizeAiMode(request.AiMode) is { } mode) session.AiMode = mode;
         if (request.SlaMinutes.HasValue) session.SlaMinutes = Math.Clamp(request.SlaMinutes.Value, 1, 1440);
-        if (request.InteraktApiKey != null) session.InteraktApiKey = request.InteraktApiKey;
-        if (request.MetaPhoneNumberId != null) session.MetaPhoneNumberId = request.MetaPhoneNumberId;
-        if (request.MetaAccessToken != null) session.MetaAccessToken = request.MetaAccessToken;
+        // A blank key field means "keep the current key", never "erase it".
+        if (!string.IsNullOrWhiteSpace(request.InteraktApiKey)) session.InteraktApiKey = request.InteraktApiKey;
+        if (!string.IsNullOrWhiteSpace(request.MetaPhoneNumberId)) session.MetaPhoneNumberId = request.MetaPhoneNumberId;
+        if (!string.IsNullOrWhiteSpace(request.MetaAccessToken)) session.MetaAccessToken = request.MetaAccessToken;
 
         session.UpdatedAt = DateTime.UtcNow;
 
-        var result = await _sessionRepo.UpdateAsync(session);
+        bool result;
+        try
+        {
+            result = await _sessionRepo.UpdateAsync(session);
+        }
+        catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number is 2627 or 2601)
+        {
+            return BadRequest(new { error = $"Phone number {session.PhoneNumber} (or this API key) is already used by another session." });
+        }
         if (!result)
         {
             return BadRequest(new { error = "Failed to update session" });
@@ -393,6 +382,7 @@ public class WhatsAppSessionsController : ControllerBase
         return Ok(new { success = true });
     }
 
+    [TejooWhatsApp.Security.RequirePage("sessions")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)
     {
@@ -414,6 +404,7 @@ public class WhatsAppSessionsController : ControllerBase
         return Ok(new { success = true });
     }
 
+    [TejooWhatsApp.Security.RequirePage("sessions")]
     [HttpPost("{id}/send-test")]
     public async Task<IActionResult> SendTestMessage(int id, [FromBody] SendTestRequest request)
     {
@@ -453,6 +444,9 @@ public class WhatsAppSessionsController : ControllerBase
             return Ok(new { success = false, message = msg });
         }
     }
+
+    private static string? NormalizeAiMode(string? raw) =>
+        raw?.Trim().ToLowerInvariant() is "off" or "suggest" or "auto" ? raw.Trim().ToLowerInvariant() : null;
 
     private static string NormalizePhone(string raw)
     {

@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { getRelativeTime } from '@/lib/utils';
 
-type FilterType = 'all' | 'unread' | 'new_message' | 'escalation' | 'assignment';
+type FilterType = 'all' | 'unread' | 'new_message' | 'escalation' | 'conversation_assigned';
 
 interface Notification {
   id: number;
@@ -96,7 +96,7 @@ export default function NotificationsPage() {
     switch (type) {
       case 'new_message': return <MessageSquare className="h-5 w-5 text-emerald-500" />;
       case 'escalation': return <AlertTriangle className="h-5 w-5 text-orange-500" />;
-      case 'assignment': return <UserPlus className="h-5 w-5 text-green-500" />;
+      case 'conversation_assigned': return <UserPlus className="h-5 w-5 text-green-500" />;
       default: return <Settings className="h-5 w-5 text-gray-400" />;
     }
   };
@@ -114,7 +114,7 @@ export default function NotificationsPage() {
     { key: 'unread', label: 'Unread', count: unreadCount },
     { key: 'new_message', label: 'Messages', count: notifications.filter(n => n.type === 'new_message').length },
     { key: 'escalation', label: 'Escalations', count: notifications.filter(n => n.type === 'escalation').length },
-    { key: 'assignment', label: 'Assignments', count: notifications.filter(n => n.type === 'assignment').length },
+    { key: 'conversation_assigned', label: 'Assignments', count: notifications.filter(n => n.type === 'conversation_assigned').length },
   ];
 
   return (
@@ -187,7 +187,7 @@ export default function NotificationsPage() {
                   <div className={`mt-0.5 flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
                     n.type === 'new_message' ? 'bg-emerald-100' :
                     n.type === 'escalation' ? 'bg-orange-100' :
-                    n.type === 'assignment' ? 'bg-green-100' : 'bg-gray-100'
+                    n.type === 'conversation_assigned' ? 'bg-green-100' : 'bg-gray-100'
                   }`}>
                     {getIcon(n.type)}
                   </div>

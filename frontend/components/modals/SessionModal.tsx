@@ -20,7 +20,8 @@ interface SessionModalProps {
 export interface SessionFormData {
   phoneNumber: string;
   provider: 'Interakt' | 'Meta';
-  apiKey: string;
+  apiKey: string;             // Interakt API key, or the Meta access token
+  metaPhoneNumberId: string;  // Meta only
   assignedUserId: number | null;
   autoReplyEnabled: boolean;
   aiMode: 'off' | 'suggest' | 'auto';
@@ -54,6 +55,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
     phoneNumber: '',
     provider: 'Interakt',
     apiKey: '',
+    metaPhoneNumberId: '',
     assignedUserId: null,
     autoReplyEnabled: false,
     aiMode: 'suggest',
@@ -84,6 +86,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
         phoneNumber: session.phoneNumber || '',
         provider: session.provider || 'Interakt',
         apiKey: session.apiKey || '',
+        metaPhoneNumberId: session.metaPhoneNumberId || '',
         assignedUserId: session.assignedUserId || null,
         autoReplyEnabled: session.autoReplyEnabled ?? true,
         aiMode: (session.aiMode as 'off' | 'suggest' | 'auto') ?? 'suggest',
@@ -95,6 +98,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
         phoneNumber: '',
         provider: 'Interakt',
         apiKey: '',
+        metaPhoneNumberId: '',
         assignedUserId: null,
         autoReplyEnabled: false,
         aiMode: 'suggest',
@@ -123,8 +127,7 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
       if (formData.provider === 'Interakt') {
         payload.ApiKey = formData.apiKey;
       } else if (formData.provider === 'Meta') {
-        payload.MetaPhoneNumberId = formData.apiKey;
-        payload.MetaBusinessAccountId = '';
+        payload.MetaPhoneNumberId = formData.metaPhoneNumberId;
         payload.MetaAccessToken = formData.apiKey;
       }
 
@@ -262,10 +265,30 @@ export function SessionModal({ open, onOpenChange, onSubmit, session, users = []
                 )}
               </div>
 
+              {/* Meta needs the Phone Number ID in addition to the access token */}
+              {formData.provider === 'Meta' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Meta Phone Number ID <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    type="text"
+                    value={formData.metaPhoneNumberId}
+                    onChange={(e) => {
+                      setFormData({ ...formData, metaPhoneNumberId: e.target.value, connectionVerified: false });
+                      setConnectionStatus('idle');
+                    }}
+                    placeholder="e.g., 123456789012345"
+                    required
+                    disabled={loading}
+                  />
+                </div>
+              )}
+
               {/* API Key with Test Connection */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  API Key <span className="text-red-500">*</span>
+                  {formData.provider === 'Meta' ? 'Access Token' : 'API Key'} <span className="text-red-500">*</span>
                 </label>
                 <div className="flex gap-2">
                   <div className="relative flex-1">

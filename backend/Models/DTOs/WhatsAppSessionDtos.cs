@@ -20,8 +20,9 @@ public class WhatsAppSessionDTO
     public DateTime? LastActiveAt { get; set; }
     public DateTime? LastInboundAt { get; set; }   // newest inbound message — drives the "receiving / stale" indicator
     public DateTime CreatedAt { get; set; }
-    // Returned for edit pre-fill — internal dashboard only
+    // Returned for edit pre-fill — only to users who can edit sessions
     public string? ApiKey { get; set; }
+    public string? MetaPhoneNumberId { get; set; }
 }
 
 public class CreateSessionRequest
@@ -32,10 +33,15 @@ public class CreateSessionRequest
     public string? InteraktApiKey { get; set; }
     public string? MetaPhoneNumberId { get; set; }
     public string? MetaAccessToken { get; set; }
+    public bool? AutoReplyEnabled { get; set; }
+    public string? AiMode { get; set; }   // off | suggest | auto
+    public int? SlaMinutes { get; set; }
 }
 
 public class UpdateSessionRequest
 {
+    public string? PhoneNumber { get; set; }
+    public string? Provider { get; set; }   // Interakt | Meta
     public int? AssignedUserId { get; set; }
     public bool? IsActive { get; set; }
     public bool? IsConnected { get; set; }

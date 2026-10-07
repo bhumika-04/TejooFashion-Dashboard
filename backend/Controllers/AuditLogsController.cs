@@ -4,6 +4,7 @@ using TejooWhatsApp.Repositories;
 namespace TejooWhatsApp.Controllers;
 
 [Microsoft.AspNetCore.Authorization.Authorize]
+[TejooWhatsApp.Security.RequirePage("audit-logs")]
 [ApiController]
 [Route("api/[controller]")]
 public class AuditLogsController : ControllerBase
@@ -22,6 +23,8 @@ public class AuditLogsController : ControllerBase
         [FromQuery] DateTime? from = null,
         [FromQuery] DateTime? to = null)
     {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 200);
         var (logs, total) = await _audit.GetPagedAsync(page, pageSize, action, entityType, userId, from, to);
         return Ok(new { logs, total, page, pageSize });
     }

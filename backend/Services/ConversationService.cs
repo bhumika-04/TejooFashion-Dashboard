@@ -102,12 +102,19 @@ public class ConversationService
             SessionDisplayName = row.SessionDisplayName ?? row.SessionPhoneNumber ?? "",
             LastMessageAt = row.LastMessageAt,
             LastMessagePreview = row.LastMessageContent,
+            AwaitingReplySince = AwaitingSince(row),
+            SlaMinutes = row.SlaMinutes ?? 30,
             IsUnread = row.IsUnread,
             HasAiMessages = row.HasAiMessages,
             CreatedAt = row.CreatedAt,
             ClosedAt = row.ClosedAt
         }).ToList();
     }
+
+    private static DateTime? AwaitingSince(ConversationListRow row) =>
+        string.Equals(row.LastMessageDirection, "inbound", StringComparison.OrdinalIgnoreCase)
+        && !AiHeuristics.IsAcknowledgement(row.LastMessageContent, row.LastMessageType)
+            ? row.LastMessageAt : null;
 
     public Task MarkViewedAsync(int conversationId, int userId)
         => _conversationRepo.MarkViewedAsync(conversationId, userId);
@@ -138,7 +145,8 @@ public class ConversationService
             CreatedAt = DateTime.UtcNow,
         });
         await _conversationRepo.UpdateLastMessageAtAsync(conversationId);
-        await _conversationRepo.UpdateStatusAsync(conversationId, "Closed");
+        // Same close path as the Resolve button: also resolves any open escalation and refreshes the summary.
+        await UpdateConversationStatusAsync(conversationId, "Closed");
     }
 
     public async Task<Conversation?> GetOrCreateConversationAsync(int sessionId, string customerPhone, string? customerName = null)
@@ -183,6 +191,31 @@ public class ConversationService
             var created = await _conversationRepo.GetBySessionAndCustomerAsync(sessionId, customerPhone);
             return created ?? throw new Exception($"Conversation race condition unresolvable for session {sessionId} / {customerPhone}");
         }
+    }
+
+    /// <summary>
+    /// A customer wrote again on a Closed chat (there is exactly one conversation per customer per
+    /// number — unique index — so a "new" enquiry lands in the old thread). Reopen it so it shows in
+    /// the active list, Overdue Replies, unread counts and AI drafts. If the previous owner is gone
+    /// (unassigned or deactivated) it goes to the number's current owner.
+    /// </summary>
+    public async Task ReopenForNewMessageAsync(Conversation conversation)
+    {
+        await _conversationRepo.UpdateStatusAsync(conversation.Id, "Open");
+        conversation.Status = "Open";
+        conversation.ClosedAt = null;
+
+        var owner = conversation.AssignedUserId > 0 ? await _userRepo.GetByIdAsync(conversation.AssignedUserId) : null;
+        if (owner is not { IsActive: true })
+        {
+            var session = await _sessionRepo.GetByIdAsync(conversation.SessionId);
+            if (session != null && session.AssignedUserId > 0 && session.AssignedUserId != conversation.AssignedUserId)
+            {
+                await _conversationRepo.UpdateAssignedUserAsync(conversation.Id, session.AssignedUserId);
+                conversation.AssignedUserId = session.AssignedUserId;
+            }
+        }
+        _logger.LogInformation("Conversation #{Id} reopened — customer wrote again after it was closed.", conversation.Id);
     }
 
     public async Task<bool> UpdateConversationStatusAsync(int id, string status)
@@ -253,7 +286,7 @@ public class ConversationService
     /// Applies one action ("close" | "assign" | "tag") to many conversations.
     /// Returns the number successfully affected. Best-effort per id — one failure doesn't abort the rest.
     /// </summary>
-    public async Task<int> BulkActionAsync(IEnumerable<int> ids, string action, int? userId, int? tagId)
+    public async Task<int> BulkActionAsync(IEnumerable<int> ids, string action, int? userId, int? tagId, int? actorUserId = null)
     {
         var affected = 0;
         foreach (var id in ids.Distinct())
@@ -267,7 +300,7 @@ public class ConversationService
                     // The background ConversationSummaryService picks closed conversations up instead.
                     "close"  => await CloseWithoutSummaryAsync(id),
                     "assign" when userId is > 0 => await AssignConversationAsync(id, userId.Value),
-                    "tag"    when tagId  is > 0 => await TagConversationAsync(id, tagId.Value),
+                    "tag"    when tagId  is > 0 => await TagConversationAsync(id, tagId.Value, actorUserId),
                     _ => false,
                 };
                 if (ok) affected++;
@@ -290,15 +323,19 @@ public class ConversationService
         return ok;
     }
 
-    private async Task<bool> TagConversationAsync(int conversationId, int tagId)
+    // A bulk tag is a manual tag: recorded against the person who applied it (NULL would mark it as
+    // an AI auto-tag that the auto-tagger may remove) and it freezes the auto-tagger on that chat,
+    // exactly like tagging one conversation by hand.
+    private async Task<bool> TagConversationAsync(int conversationId, int tagId, int? actorUserId)
     {
-        await _tagRepo.AddToConversationAsync(conversationId, tagId, null);
+        await _tagRepo.AddToConversationAsync(conversationId, tagId, actorUserId);
+        await _tagRepo.LockTagsAsync(conversationId);
         return true;
     }
 
-    public async Task<List<ConversationListDTO>> SearchConversationsAsync(string query, int limit = 30, IReadOnlyList<int>? assignedUserIds = null)
+    public async Task<List<ConversationListDTO>> SearchConversationsAsync(string query, int limit = 30, IReadOnlyList<int>? assignedUserIds = null, int? sessionId = null)
     {
-        var rows = await _conversationRepo.SearchAsync(query, limit, assignedUserIds);
+        var rows = await _conversationRepo.SearchAsync(query, limit, assignedUserIds, sessionId);
         return rows.Select(row => new ConversationListDTO
         {
             Id = row.Id,
@@ -312,6 +349,8 @@ public class ConversationService
             SessionDisplayName = row.SessionDisplayName ?? row.SessionPhoneNumber ?? "",
             LastMessageAt = row.LastMessageAt,
             LastMessagePreview = row.LastMessageContent,
+            AwaitingReplySince = AwaitingSince(row),
+            SlaMinutes = row.SlaMinutes ?? 30,
             HasAiMessages = row.HasAiMessages,
             CreatedAt = row.CreatedAt,
             ClosedAt = row.ClosedAt
@@ -333,11 +372,12 @@ public class ConversationService
         };
     }
 
-    public async Task<ConversationSummaryDTO> GenerateSummaryAsync(int conversationId, int messageLimit = 50)
+    public async Task<ConversationSummaryDTO> GenerateSummaryAsync(int conversationId, int messageLimit = 50, bool oldestFirst = false)
     {
-        // The retention job passes a large limit so the pre-delete summary covers everything it is
-        // about to permanently delete (not just the oldest 50), preventing silent data loss.
-        var messages = await _messageRepo.GetByConversationIdAsync(conversationId, messageLimit);
+        // Normally: the newest messages, folded into the previous cumulative summary below. The
+        // retention job instead asks for the OLDEST (large limit) so the pre-delete summary covers
+        // exactly what it is about to permanently delete.
+        var messages = await _messageRepo.GetByConversationIdAsync(conversationId, messageLimit, oldestFirst);
         var prior = await _summaryRepo.GetByConversationIdAsync(conversationId);
         if (messages.Count == 0 && prior == null)
             throw new Exception("No messages to summarize");
@@ -441,6 +481,7 @@ public class ConversationService
         MessageType = message.MessageType,
         Content = message.Content,
         MediaUrl = message.MediaUrl,
+        Transcript = message.Transcript,
         IsAiGenerated = message.IsAiGenerated,
         Intent = message.Intent,
         Confidence = message.Confidence,

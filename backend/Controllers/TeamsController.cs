@@ -91,6 +91,7 @@ public class TeamsController : ControllerBase
         });
     }
 
+    [TejooWhatsApp.Security.RequirePage("teams")]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateTeamRequest request)
     {
@@ -116,6 +117,7 @@ public class TeamsController : ControllerBase
         return Ok(new { success = true, teamId = team.Id });
     }
 
+    [TejooWhatsApp.Security.RequirePage("teams")]
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateTeamRequest request)
     {
@@ -143,6 +145,7 @@ public class TeamsController : ControllerBase
         return Ok(new { success = true });
     }
 
+    [TejooWhatsApp.Security.RequirePage("teams")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)
     {
@@ -216,6 +219,7 @@ public class TeamsController : ControllerBase
         return Ok(dtos);
     }
 
+    [TejooWhatsApp.Security.RequirePage("teams")]
     [HttpPost("{id}/members")]
     public async Task<IActionResult> AddMember(int id, [FromBody] AddTeamMemberRequest request)
     {
@@ -271,6 +275,7 @@ public class TeamsController : ControllerBase
         }
     }
 
+    [TejooWhatsApp.Security.RequirePage("teams")]
     [HttpPut("{teamId}/members/{memberId}")]
     public async Task<IActionResult> UpdateMember(int teamId, int memberId, [FromBody] UpdateTeamMemberRequest request)
     {
@@ -305,6 +310,7 @@ public class TeamsController : ControllerBase
         }
     }
 
+    [TejooWhatsApp.Security.RequirePage("teams")]
     [HttpDelete("{teamId}/members/{userId}")]
     public async Task<IActionResult> RemoveMember(int teamId, int userId)
     {

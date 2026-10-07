@@ -97,7 +97,7 @@ public class EscalationTimeoutService : BackgroundService
         {
             var teamMembers = await teamMemberRepo.GetMembersByTeamAsync(teamId.Value);
             var inTeam = teamMembers
-                .Where(m => m.IsActive)
+                .Where(m => m.IsActive && m.User is { IsActive: true })   // membership AND account active
                 .FirstOrDefault(m => string.Equals(m.RoleInTeam, role, StringComparison.OrdinalIgnoreCase));
 
             if (inTeam != null) return await userRepo.GetByIdAsync(inTeam.UserId);

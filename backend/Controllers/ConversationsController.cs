@@ -16,7 +16,7 @@ public class ConversationsController : ControllerBase
     private readonly ConversationService _conversationService;
     private readonly WhatsAppOrchestrator _orchestrator;
     private readonly AiSuggestionRepository _suggestions;
-    private readonly ITeamMemberRepository _teamMembers;
+    private readonly TejooWhatsApp.Security.VisibilityService _visibility;
     private readonly ILogger<ConversationsController> _logger;
     private readonly IWebHostEnvironment _env;
 
@@ -24,14 +24,14 @@ public class ConversationsController : ControllerBase
         ConversationService conversationService,
         WhatsAppOrchestrator orchestrator,
         AiSuggestionRepository suggestions,
-        ITeamMemberRepository teamMembers,
+        TejooWhatsApp.Security.VisibilityService visibility,
         ILogger<ConversationsController> logger,
         IWebHostEnvironment env)
     {
         _conversationService = conversationService;
         _orchestrator = orchestrator;
         _suggestions = suggestions;
-        _teamMembers = teamMembers;
+        _visibility = visibility;
         _logger = logger;
         _env = env;
     }
@@ -62,6 +62,7 @@ public class ConversationsController : ControllerBase
     [HttpPost("{id:int}/viewed")]
     public async Task<IActionResult> MarkViewed(int id)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         var uid = CallerUserId();
         if (uid is null) return Ok(new { success = false });
         await _conversationService.MarkViewedAsync(id, uid.Value);
@@ -97,40 +98,13 @@ public class ConversationsController : ControllerBase
         return Ok(counts);
     }
 
-    /// <summary>
-    /// The set of assigned-user ids the caller may see, enforced server-side (null = ALL, Admin only):
-    ///   Admin       → all conversations (null);
-    ///   Manager/HOD → own id + every member of their team(s);
-    ///   CRR/Agent   → own id only (a malformed token resolves to {-1}, matching no rows).
-    /// An optional client-supplied <paramref name="requested"/> narrows within that set (ignored if outside it).
-    /// </summary>
-    private async Task<List<int>?> ResolveVisibleAsync(int? requested)
-    {
-        var role = User.FindFirst(ClaimTypes.Role)?.Value ?? "";
-        var uid = CallerUserId() ?? -1;
+    /// <summary>The assigned-user ids the caller may see (null = all) — see VisibilityService.</summary>
+    private Task<List<int>?> ResolveVisibleAsync(int? requested) => _visibility.VisibleUserIdsAsync(User, requested);
 
-        List<int>? visible;
-        if (role.Equals("Admin", StringComparison.OrdinalIgnoreCase))
-            visible = null; // all
-        else if (role.Equals("CRR", StringComparison.OrdinalIgnoreCase) || role.Equals("Agent", StringComparison.OrdinalIgnoreCase))
-            visible = new List<int> { uid };
-        else
-        {
-            // Manager / HOD → own id + everyone in their team(s).
-            var ids = new HashSet<int> { uid };
-            foreach (var membership in await _teamMembers.GetMembershipsByUserAsync(uid))
-                foreach (var member in await _teamMembers.GetMembersByTeamAsync(membership.TeamId))
-                    ids.Add(member.UserId);
-            visible = ids.ToList();
-        }
-
-        if (requested.HasValue)
-        {
-            if (visible == null) return new List<int> { requested.Value };            // Admin filtering to one user
-            return visible.Contains(requested.Value) ? new List<int> { requested.Value } : visible;
-        }
-        return visible;
-    }
+    /// <summary>404 unless the caller may see this conversation — the same rule as reading it, so
+    /// agents can't act on (send, close, assign, delete…) chats they aren't allowed to open.</summary>
+    private async Task<IActionResult?> DenyUnlessVisibleAsync(int id) =>
+        await _visibility.CanAccessConversationAsync(User, id) ? null : NotFound(new { error = "Conversation not found" });
 
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id)
@@ -165,7 +139,7 @@ public class ConversationsController : ControllerBase
         if (visible != null && !visible.Contains(conversation.AssignedUser?.Id ?? 0))
             return Ok((object?)null);
 
-        var s = await _suggestions.GetPendingAsync(id);
+        var s = await _orchestrator.GetShowablePendingSuggestionAsync(id);
         if (s == null) return Ok((object?)null);
         return Ok(new AiSuggestionDTO
         {
@@ -200,17 +174,19 @@ public class ConversationsController : ControllerBase
     [HttpPost("{id:int}/suggestion/{suggestionId:int}/resolve")]
     public async Task<IActionResult> ResolveSuggestion(int id, int suggestionId, [FromBody] ResolveSuggestionRequest request)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         var allowed = new[] { "Sent", "Edited", "Dismissed" };
         if (!allowed.Contains(request.Status))
             return BadRequest(new { error = "Invalid status" });
 
-        var ok = await _suggestions.ResolveAsync(suggestionId, request.Status, CallerUserId());
+        var ok = await _suggestions.ResolveAsync(suggestionId, id, request.Status, CallerUserId());
         return ok ? Ok(new { success = true }) : NotFound(new { error = "Suggestion not found or already resolved" });
     }
 
     [HttpPut("{id:int}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateConversationRequest request)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         if (string.IsNullOrEmpty(request.Status))
         {
             return BadRequest(new { error = "Status is required" });
@@ -230,6 +206,7 @@ public class ConversationsController : ControllerBase
     [HttpPost("{id:int}/send-message")]
     public async Task<IActionResult> SendMessage(int id, [FromBody] SendMessageRequest request)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         var isMedia = request.MessageType is "image" or "video" or "document" or "audio";
         if (!isMedia && string.IsNullOrEmpty(request.Content))
             return BadRequest(new { error = "Message content is required" });
@@ -269,6 +246,7 @@ public class ConversationsController : ControllerBase
     [RequestSizeLimit(104_857_600)] // 100 MB — highest single-type ceiling (documents)
     public async Task<IActionResult> UploadMedia(int id, IFormFile file)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         if (file == null || file.Length == 0)
             return BadRequest(new { error = "No file provided" });
 
@@ -313,6 +291,7 @@ public class ConversationsController : ControllerBase
     [HttpPost("{id:int}/close")]
     public async Task<IActionResult> CloseConversation(int id)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         var result = await _conversationService.UpdateConversationStatusAsync(id, "Closed");
         if (!result)
         {
@@ -328,6 +307,7 @@ public class ConversationsController : ControllerBase
     [HttpPut("{id:int}/notes")]
     public async Task<IActionResult> UpdateNotes(int id, [FromBody] UpdateNotesRequest request)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         await _conversationService.UpdateNotesAsync(id, request.Notes);
         return Ok(new { success = true });
     }
@@ -337,6 +317,7 @@ public class ConversationsController : ControllerBase
     [HttpPost("{id:int}/resolve-via-call")]
     public async Task<IActionResult> ResolveViaCall(int id)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         await _conversationService.ResolveViaCallAsync(id);
         _logger.LogInformation("✓ Conversation #{ConversationId} resolved via call", id);
         return Ok(new { success = true });
@@ -345,6 +326,7 @@ public class ConversationsController : ControllerBase
     [HttpPut("{id:int}/assign")]
     public async Task<IActionResult> AssignConversation(int id, [FromBody] AssignConversationRequest request)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         var result = await _conversationService.AssignConversationAsync(id, request.AssignedUserId);
         if (!result)
             return NotFound(new { error = "Conversation not found" });
@@ -367,24 +349,28 @@ public class ConversationsController : ControllerBase
         if (request.Action == "tag" && (request.TagId is null or <= 0))
             return BadRequest(new { error = "A tag is required" });
 
-        var affected = await _conversationService.BulkActionAsync(request.Ids, request.Action, request.UserId, request.TagId);
+        var visibleIds = new List<int>();
+        foreach (var cid in request.Ids.Distinct())
+            if (await _visibility.CanAccessConversationAsync(User, cid)) visibleIds.Add(cid);
+        var affected = await _conversationService.BulkActionAsync(visibleIds, request.Action, request.UserId, request.TagId, CallerUserId());
         _logger.LogInformation("✓ Bulk '{Action}' applied to {Count}/{Total} conversations", request.Action, affected, request.Ids.Length);
         return Ok(new { success = true, affected });
     }
 
     [HttpGet("search")]
-    public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] int limit = 30, [FromQuery] int? assignedUserId = null)
+    public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] int limit = 30, [FromQuery] int? assignedUserId = null, [FromQuery] int? sessionId = null)
     {
         if (string.IsNullOrWhiteSpace(q))
             return BadRequest(new { error = "Search query is required" });
 
-        var results = await _conversationService.SearchConversationsAsync(q, limit, await ResolveVisibleAsync(assignedUserId));
+        var results = await _conversationService.SearchConversationsAsync(q, Math.Clamp(limit, 1, 200), await ResolveVisibleAsync(assignedUserId), sessionId);
         return Ok(results);
     }
 
     [HttpGet("{id:int}/summary")]
     public async Task<IActionResult> GetSummary(int id)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         var summary = await _conversationService.GetSummaryAsync(id);
         if (summary == null)
             return NotFound(new { error = "No summary found" });
@@ -394,6 +380,7 @@ public class ConversationsController : ControllerBase
     [HttpPost("{id:int}/summarize")]
     public async Task<IActionResult> GenerateSummary(int id)
     {
+        if (await DenyUnlessVisibleAsync(id) is { } denied) return denied;
         try
         {
             var summary = await _conversationService.GenerateSummaryAsync(id);
@@ -408,6 +395,7 @@ public class ConversationsController : ControllerBase
     }
 
     [HttpDelete("{id:int}")]
+    [TejooWhatsApp.Security.RequirePage]
     public async Task<IActionResult> DeleteConversation(int id)
     {
         var result = await _conversationService.DeleteConversationAsync(id);
@@ -427,6 +415,7 @@ public class ConversationsController : ControllerBase
     }
 
     [HttpGet("storage-stats")]
+    [TejooWhatsApp.Security.RequirePage]
     public IActionResult GetStorageStats()
     {
         var uploadsRoot = Path.Combine(_env.WebRootPath, "uploads", "conversations");

@@ -113,8 +113,12 @@ export function MobileBottomNav() {
 
         <div className="flex items-center gap-1 flex-shrink-0">
           {pathname === '/dashboard/overview' && <OverviewRangeFilter />}
-          {pathname === '/dashboard/reports' && <OverviewRangeFilter initial="This Week" />}
-          {pathname === '/dashboard/performance' && <OverviewRangeFilter initial="Today" />}
+          {pathname === '/dashboard/reports' && (
+            <OverviewRangeFilter initial="Last 7 Days" options={['Today', 'Last 7 Days', 'Last 30 Days', 'Last 90 Days', 'Last 365 Days']} />
+          )}
+          {pathname === '/dashboard/performance' && (
+            <OverviewRangeFilter initial="Today" options={['Today', 'Last 7 Days', 'Last 30 Days']} />
+          )}
           <NotificationBell />
 
           {/* Profile button */}

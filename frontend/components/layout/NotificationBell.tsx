@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Bell, MessageSquare, AlertTriangle, UserPlus, Settings, CheckCheck, Volume2, VolumeX, Monitor } from 'lucide-react';
 import { notificationsApi } from '@/services/api';
-import { formatDateOnly } from '@/lib/utils';
+import { formatDateOnly, parseUTCDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useSignalR, SignalRNotification } from '@/hooks/useSignalR';
 import {
@@ -42,8 +42,19 @@ export function NotificationBell() {
     setSoundOn(s); setDesktopOn(d); soundRef.current = s; desktopRef.current = d;
   }, []);
 
+  // Same push can arrive twice (your own user group + the open conversation's group).
+  const recentKeysRef = useRef<Map<string, number>>(new Map());
+
   const handleRealTimeNotification = useCallback((notification: SignalRNotification) => {
     if (!mountedRef.current) return;
+    // Live-only signals are never bell notifications: an echo of a reply the business sent, and
+    // unread-count refreshes. Only types the server also stores count toward the badge.
+    if (notification.type === 'outbound_message' || notification.type === 'unread_count') return;
+    const key = `${notification.type}|${notification.conversationId ?? ''}|${notification.message}|${notification.timestamp}`;
+    const now = Date.now();
+    for (const [k, t] of recentKeysRef.current) if (now - t > 10_000) recentKeysRef.current.delete(k);
+    if (recentKeysRef.current.has(key)) return;
+    recentKeysRef.current.set(key, now);
     // Increment badge count immediately
     setUnreadCount(prev => prev + 1);
     // Audible + desktop alerts (refs so the stable callback reads current prefs)
@@ -177,7 +188,7 @@ export function NotificationBell() {
         return <MessageSquare className="h-4 w-4 text-blue-500" />;
       case 'escalation':
         return <AlertTriangle className="h-4 w-4 text-orange-500" />;
-      case 'assignment':
+      case 'conversation_assigned':
         return <UserPlus className="h-4 w-4 text-green-500" />;
       default:
         return <Settings className="h-4 w-4 text-gray-500" />;
@@ -196,7 +207,7 @@ export function NotificationBell() {
   };
 
   const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
+    const date = parseUTCDate(dateString) ?? new Date();
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / 60000);

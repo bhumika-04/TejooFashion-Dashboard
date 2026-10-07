@@ -9,11 +9,13 @@ namespace TejooWhatsApp.Controllers;
 public class RolePermissionsController : ControllerBase
 {
     private readonly RolePermissionRepository _repo;
+    private readonly TejooWhatsApp.Security.PageAccessService _pageAccess;
     private readonly ILogger<RolePermissionsController> _logger;
 
-    public RolePermissionsController(RolePermissionRepository repo, ILogger<RolePermissionsController> logger)
+    public RolePermissionsController(RolePermissionRepository repo, TejooWhatsApp.Security.PageAccessService pageAccess, ILogger<RolePermissionsController> logger)
     {
         _repo = repo;
+        _pageAccess = pageAccess;
         _logger = logger;
     }
 
@@ -41,18 +43,22 @@ public class RolePermissionsController : ControllerBase
 
     // POST api/rolepermissions — upsert a single permission
     [HttpPost]
+    [TejooWhatsApp.Security.RequirePage("role-management")]
     public async Task<IActionResult> Upsert([FromBody] UpsertPermissionRequest request)
     {
         await _repo.UpsertAsync(request.Role, request.Page, request.CanAccess);
+        _pageAccess.Invalidate();
         _logger.LogInformation("✓ Role permission updated: {Role}/{Page} = {CanAccess}", request.Role, request.Page, request.CanAccess);
         return Ok(new { success = true });
     }
 
     // PUT api/rolepermissions/{role} — bulk update all pages for a role
     [HttpPut("{role}")]
+    [TejooWhatsApp.Security.RequirePage("role-management")]
     public async Task<IActionResult> BulkUpdate(string role, [FromBody] Dictionary<string, bool> pageAccess)
     {
         await _repo.BulkUpsertAsync(role, pageAccess);
+        _pageAccess.Invalidate();
         _logger.LogInformation("✓ Bulk role permissions updated for {Role} ({Count} pages)", role, pageAccess.Count);
         return Ok(new { success = true });
     }

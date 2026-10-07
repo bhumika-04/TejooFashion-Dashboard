@@ -12,7 +12,12 @@ export type FilterRange =
   | 'Last Month'
   | 'Last 3 Months'
   | 'All Time'
-  | 'Custom Range';
+  | 'Custom Range'
+  // Rolling windows ending today — for pages whose APIs only take "last N days".
+  | 'Last 7 Days'
+  | 'Last 30 Days'
+  | 'Last 90 Days'
+  | 'Last 365 Days';
 
 const FILTER_OPTIONS: FilterRange[] = [
   'Today',
@@ -28,9 +33,11 @@ const FILTER_OPTIONS: FilterRange[] = [
 interface ChartFilterDropdownProps {
   value: FilterRange;
   onChange: (value: FilterRange, customFrom?: string, customTo?: string) => void;
+  /** Only offer the ranges the page can actually apply (defaults to the full calendar list). */
+  options?: FilterRange[];
 }
 
-export function ChartFilterDropdown({ value, onChange }: ChartFilterDropdownProps) {
+export function ChartFilterDropdown({ value, onChange, options = FILTER_OPTIONS }: ChartFilterDropdownProps) {
   const [open, setOpen] = useState(false);
   const [showCustom, setShowCustom] = useState(false);
   const [customFrom, setCustomFrom] = useState('');
@@ -85,7 +92,7 @@ export function ChartFilterDropdown({ value, onChange }: ChartFilterDropdownProp
         <div className="absolute right-0 mt-1.5 w-52 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
           {!showCustom ? (
             <div className="py-1">
-              {FILTER_OPTIONS.map((opt) => (
+              {options.map((opt) => (
                 <button
                   key={opt}
                   onClick={() => handleSelect(opt)}

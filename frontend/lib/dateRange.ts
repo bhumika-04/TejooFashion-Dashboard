@@ -24,6 +24,10 @@ export function rangeToDays(range: FilterRange, from?: string, to?: string): num
     case 'Last Month': return 30;
     case 'Last 3 Months': return 90;
     case 'All Time': return 365;
+    case 'Last 7 Days': return 7;
+    case 'Last 30 Days': return 30;
+    case 'Last 90 Days': return 90;
+    case 'Last 365 Days': return 365;
     case 'Custom Range':
       if (from && to) {
         const d = Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1;
@@ -39,8 +43,9 @@ export function rangeToPerfPeriod(range: FilterRange): 'today' | 'week' | 'month
   switch (range) {
     case 'Today': return 'today';
     case 'This Week':
-    case 'Last Week': return 'week';
-    default: return 'month'; // This/Last Month, Last 3 Months, All Time, Custom
+    case 'Last Week':
+    case 'Last 7 Days': return 'week';
+    default: return 'month'; // Last 30 Days (and any longer range)
   }
 }
 
@@ -71,6 +76,13 @@ export function rangeToDates(range: FilterRange, customFrom?: string, customTo?:
       return { from: '2000-01-01', to: fmt(today) }; // wide-open lower bound covers all data
     case 'Custom Range':
       return { from: customFrom || fmt(today), to: customTo || fmt(today) };
+    case 'Last 7 Days':
+    case 'Last 30 Days':
+    case 'Last 90 Days':
+    case 'Last 365 Days': {
+      const n = parseInt(range.split(' ')[1], 10);
+      from = new Date(today); from.setDate(today.getDate() - (n - 1)); break;
+    }
     // 'Today' → from = to = today (defaults above)
   }
   return { from: fmt(from), to: fmt(to) };

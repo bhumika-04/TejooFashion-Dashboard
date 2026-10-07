@@ -122,8 +122,13 @@ public class EscalationRepository
     public async Task<bool> UpdateStatusAsync(int id, string status)
     {
         using var conn = _db.CreateConnection();
-        var rows = await conn.ExecuteAsync(
-            "UPDATE Escalations SET Status = @Status WHERE Id = @Id",
+        // Marking an escalation In Progress means someone has picked it up — restart its timeout
+        // window so the matrix doesn't bump it away from them moments later.
+        var rows = await conn.ExecuteAsync(@"
+            UPDATE Escalations
+            SET Status = @Status,
+                LastEscalatedAt = CASE WHEN @Status = 'InProgress' THEN GETUTCDATE() ELSE LastEscalatedAt END
+            WHERE Id = @Id",
             new { Id = id, Status = status });
         return rows > 0;
     }

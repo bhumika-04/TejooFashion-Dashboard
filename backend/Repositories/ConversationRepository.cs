@@ -1,3 +1,4 @@
+using TejooWhatsApp.AI;
 using TejooWhatsApp.Models.Entities;
 using TejooWhatsApp.Utilities;
 
@@ -49,7 +50,10 @@ public class ConversationRepository
                 u.FullName AS AssignedUserName,
                 s.DisplayName AS SessionDisplayName,
                 s.PhoneNumber AS SessionPhoneNumber,
+                s.SlaMinutes AS SlaMinutes,
                 m.Content AS LastMessageContent,
+                m.Direction AS LastMessageDirection,
+                m.MessageType AS LastMessageType,
                 CAST(CASE WHEN EXISTS (
                     SELECT 1 FROM Messages WHERE ConversationId = c.Id AND IsAiGenerated = 1
                 ) THEN 1 ELSE 0 END AS BIT) AS HasAiMessages,
@@ -99,34 +103,61 @@ public class ConversationRepository
 
     /// <summary>
     /// Open conversations assigned to <paramref name="userId"/> that are awaiting the agent's reply
-    /// PAST the session's First-Response SLA: the last message is inbound, there is no outbound after
-    /// it, and the wait already exceeds the session's SlaMinutes. Longest-waiting first.
+    /// PAST the session's First-Response SLA: the customer's last message that needs a reply has no
+    /// outbound after it, and the wait already exceeds the session's SlaMinutes. Acknowledgements
+    /// ("Ok", "Thanks", 👍 — see AiHeuristics.IsAcknowledgement) are ignored, so a customer closing
+    /// the exchange never restarts the clock. Longest-waiting first.
     /// </summary>
     public async Task<List<SlaBreachRow>> GetSlaBreachesForUserAsync(int userId)
     {
         using var conn = _db.CreateConnection();
-        var sql = @"
+        // Every customer message since our last reply, per open chat; the acknowledgement check
+        // runs in C# (it's word-based, too rich for SQL). The latest non-ack one sets the wait.
+        const string sql = @"
             SELECT c.Id, c.CustomerName, c.CustomerPhone, c.SessionId,
-                   s.PhoneNumber AS SessionPhoneNumber,
-                   li.LastInboundAt,
-                   DATEDIFF(MINUTE, li.LastInboundAt, GETUTCDATE()) AS MinutesWaiting,
-                   s.SlaMinutes
+                   s.PhoneNumber AS SessionPhoneNumber, s.SlaMinutes,
+                   m.CreatedAt, m.MessageType, LEFT(m.Content, 200) AS Content,
+                   DATEDIFF(MINUTE, m.CreatedAt, GETUTCDATE()) AS MinutesAgo
             FROM Conversations c
             JOIN WhatsAppSessions s ON s.Id = c.SessionId
             CROSS APPLY (
-                SELECT MAX(m.CreatedAt) AS LastInboundAt
-                FROM Messages m
-                WHERE m.ConversationId = c.Id AND m.Direction = 'inbound'
-            ) li
+                SELECT MAX(o.CreatedAt) AS LastOutboundAt
+                FROM Messages o
+                WHERE o.ConversationId = c.Id AND o.Direction = 'outbound'
+            ) lo
+            JOIN Messages m ON m.ConversationId = c.Id AND m.Direction = 'inbound'
+                           AND (lo.LastOutboundAt IS NULL OR m.CreatedAt > lo.LastOutboundAt)
             WHERE c.AssignedUserId = @UserId
-              AND c.Status = 'Open'
-              AND li.LastInboundAt IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM Messages o
-                  WHERE o.ConversationId = c.Id AND o.Direction = 'outbound' AND o.CreatedAt > li.LastInboundAt)
-              AND DATEDIFF(MINUTE, li.LastInboundAt, GETUTCDATE()) > s.SlaMinutes
-            ORDER BY MinutesWaiting DESC";
-        return (await conn.QueryAsync<SlaBreachRow>(sql, new { UserId = userId })).ToList();
+              AND c.Status = 'Open'";
+        var pending = await conn.QueryAsync<PendingInboundRow>(sql, new { UserId = userId });
+
+        return pending
+            .Where(m => !AiHeuristics.IsAcknowledgement(m.Content, m.MessageType))
+            .GroupBy(m => m.Id)
+            .Select(g => g.MaxBy(m => m.CreatedAt)!)
+            .Where(m => m.MinutesAgo > m.SlaMinutes)
+            .OrderByDescending(m => m.MinutesAgo)
+            .Select(m => new SlaBreachRow
+            {
+                Id = m.Id, CustomerName = m.CustomerName, CustomerPhone = m.CustomerPhone,
+                SessionId = m.SessionId, SessionPhoneNumber = m.SessionPhoneNumber,
+                LastInboundAt = m.CreatedAt, MinutesWaiting = m.MinutesAgo, SlaMinutes = m.SlaMinutes
+            })
+            .ToList();
+    }
+
+    private class PendingInboundRow
+    {
+        public int Id { get; set; }
+        public string? CustomerName { get; set; }
+        public string CustomerPhone { get; set; } = string.Empty;
+        public int SessionId { get; set; }
+        public string? SessionPhoneNumber { get; set; }
+        public int SlaMinutes { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public string? MessageType { get; set; }
+        public string? Content { get; set; }
+        public int MinutesAgo { get; set; }
     }
 
     /// <summary>Records that a user has viewed a conversation (upsert into ConversationViews).</summary>
@@ -275,7 +306,7 @@ public class ConversationRepository
         return rows > 0;
     }
 
-    public async Task<List<ConversationListRow>> SearchAsync(string query, int limit = 30, IReadOnlyList<int>? assignedUserIds = null)
+    public async Task<List<ConversationListRow>> SearchAsync(string query, int limit = 30, IReadOnlyList<int>? assignedUserIds = null, int? sessionId = null)
     {
         using var conn = _db.CreateConnection();
         var sql = @"
@@ -284,7 +315,10 @@ public class ConversationRepository
                 u.FullName AS AssignedUserName,
                 s.DisplayName AS SessionDisplayName,
                 s.PhoneNumber AS SessionPhoneNumber,
-                m.Content AS LastMessageContent
+                s.SlaMinutes AS SlaMinutes,
+                m.Content AS LastMessageContent,
+                m.Direction AS LastMessageDirection,
+                m.MessageType AS LastMessageType
             FROM Conversations c
             LEFT JOIN Users u ON c.AssignedUserId = u.Id
             LEFT JOIN WhatsAppSessions s ON c.SessionId = s.Id
@@ -295,10 +329,11 @@ public class ConversationRepository
             )
             WHERE (c.CustomerPhone LIKE @Query OR c.CustomerName LIKE @Query)";
         if (assignedUserIds != null) sql += " AND c.AssignedUserId IN @AssignedUserIds";
+        if (sessionId.HasValue) sql += " AND c.SessionId = @SessionId";
         sql += " ORDER BY c.LastMessageAt DESC, c.CreatedAt DESC";
 
         var result = await conn.QueryAsync<ConversationListRow>(sql,
-            new { Query = $"%{query}%", Limit = limit, AssignedUserIds = assignedUserIds });
+            new { Query = $"%{query}%", Limit = limit, AssignedUserIds = assignedUserIds, SessionId = sessionId });
         return result.ToList();
     }
 
@@ -373,6 +408,9 @@ public class ConversationListRow
     public string? SessionDisplayName { get; set; }
     public string? SessionPhoneNumber { get; set; }
     public string? LastMessageContent { get; set; }
+    public string? LastMessageDirection { get; set; }
+    public string? LastMessageType { get; set; }
+    public int? SlaMinutes { get; set; }
     public int MessageCount { get; set; }
     public string? TagsRaw { get; set; }     // "Name|Color;;Name2|Color2"
     public string? SummaryText { get; set; }

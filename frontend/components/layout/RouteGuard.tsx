@@ -7,10 +7,13 @@ import { usePermissions } from '@/hooks/usePermissions';
 // Pages that are always accessible regardless of role
 const PUBLIC_DASHBOARD_PATHS = ['/dashboard/settings', '/dashboard/notifications'];
 
+// Routes whose Role Management key differs from the URL segment.
+const PAGE_KEY_ALIASES: Record<string, string> = { system: 'system-health' };
+
 // Extract the page key from a pathname, e.g. '/dashboard/audit-logs' → 'audit-logs'
 function pageKeyFromPath(pathname: string): string | null {
   const match = pathname.match(/^\/dashboard\/([^/]+)/);
-  return match ? match[1] : null;
+  return match ? (PAGE_KEY_ALIASES[match[1]] ?? match[1]) : null;
 }
 
 export default function RouteGuard({ children }: { children: React.ReactNode }) {

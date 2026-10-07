@@ -6,7 +6,7 @@ import { rangeToDates, DASHBOARD_RANGE_EVENT, DashboardRangeDetail } from '@/lib
 
 // Page-wide date filter rendered in the shared header beside the notification bell (Overview,
 // Reports, Performance). Broadcasts the selected range to the active page via a window event.
-export function OverviewRangeFilter({ initial = 'Today' }: { initial?: FilterRange }) {
+export function OverviewRangeFilter({ initial = 'Today', options }: { initial?: FilterRange; options?: FilterRange[] }) {
   const [range, setRange] = useState<FilterRange>(initial);
 
   const handleChange = (r: FilterRange, customFrom?: string, customTo?: string) => {
@@ -17,5 +17,5 @@ export function OverviewRangeFilter({ initial = 'Today' }: { initial?: FilterRan
     );
   };
 
-  return <ChartFilterDropdown value={range} onChange={handleChange} />;
+  return <ChartFilterDropdown value={range} onChange={handleChange} options={options} />;
 }

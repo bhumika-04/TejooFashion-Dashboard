@@ -17,6 +17,10 @@ public class ConversationListDTO
     public string? LastMessagePreview { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? ClosedAt { get; set; }
+    // Set when the customer spoke last with something that needs a reply (not an "Ok/Thanks");
+    // drives the list's SLA timer together with the number's own SLA.
+    public DateTime? AwaitingReplySince { get; set; }
+    public int SlaMinutes { get; set; } = 30;
 }
 
 public class ConversationDetailDTO

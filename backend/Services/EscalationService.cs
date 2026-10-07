@@ -32,7 +32,8 @@ public class EscalationService
 
     /// <summary>Maps a user's role to the matching escalation-ladder rung (CRR=1, Manager=2, HOD=3),
     /// so escalations created for a given person start the timeout matrix at the correct level.</summary>
-    public static int LevelForRole(string? role) => role switch { "HOD" => 3, "Manager" => 2, _ => 1 };
+    /// Admin sits at the top rung too, so the timeout matrix never "escalates" an Admin down to a Manager.
+    public static int LevelForRole(string? role) => role switch { "Admin" or "HOD" => 3, "Manager" => 2, _ => 1 };
 
     public async Task<Escalation> CreateEscalationAsync(
         int conversationId,
@@ -234,11 +235,13 @@ public class EscalationService
 
         // 2. Role-based escalation within the same team
         var teamMembers = await _teamMemberRepo.GetMembersByTeamAsync(teamId.Value);
+        // Both the team membership AND the user account must be active — never route to a deactivated user.
+        bool Usable(TeamMember tm) => tm.IsActive && tm.User is { IsActive: true };
         var nextLevelMember = currentMembership.RoleInTeam switch
         {
-            "CRR"     => teamMembers.FirstOrDefault(tm => tm.RoleInTeam == "Manager" && tm.IsActive),
-            "Manager" => teamMembers.FirstOrDefault(tm => tm.RoleInTeam == "HOD"     && tm.IsActive),
-            "HOD"     => teamMembers.FirstOrDefault(tm => tm.RoleInTeam == "Admin"   && tm.IsActive),
+            "CRR"     => teamMembers.FirstOrDefault(tm => tm.RoleInTeam == "Manager" && Usable(tm)),
+            "Manager" => teamMembers.FirstOrDefault(tm => tm.RoleInTeam == "HOD"     && Usable(tm)),
+            "HOD"     => teamMembers.FirstOrDefault(tm => tm.RoleInTeam == "Admin"   && Usable(tm)),
             _         => null
         };
 

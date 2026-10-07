@@ -63,7 +63,7 @@ public class ConversationRetentionService : BackgroundService
             {
                 // SAFETY: refresh the cumulative summary first (wide window so it covers everything
                 // about to be deleted) — never delete without a saved summary.
-                try { await convService.GenerateSummaryAsync(convId, messageLimit: 1000); }
+                try { await convService.GenerateSummaryAsync(convId, messageLimit: 1000, oldestFirst: true); }
                 catch (Exception ex) { _logger.LogWarning("Retention: summary refresh failed for #{Id} ({Error}) — skipping delete.", convId, ex.Message); continue; }
 
                 var summary = await summaryRepo.GetByConversationIdAsync(convId);

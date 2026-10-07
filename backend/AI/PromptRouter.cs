@@ -90,6 +90,11 @@ public class AiRouterService
                 "if they write in Hindi (Devanagari) reply in Hindi, if in Hinglish/Romanized Hindi reply in Hinglish, if in English reply in English. " +
                 "Mirror their tone and formality. Do NOT translate to English by default. Keep the JSON keys and structure exactly as specified (in English).";
 
+            // WhatsApp shows Markdown literally ("**bold**" arrives with the asterisks), so use its own syntax.
+            specialistSystem +=
+                "\n\n[Format] This reply is sent on WhatsApp. Use WhatsApp formatting only: *single asterisks* for bold, _underscores_ for italics. " +
+                "Never use Markdown such as **double asterisks**, # headings or [links](url).";
+
             if (!string.IsNullOrWhiteSpace(summaryContext))
                 specialistSystem += $"\n\n[Context — summary of the earlier conversation so far; use it but do not repeat it verbatim]:\n{summaryContext}";
 

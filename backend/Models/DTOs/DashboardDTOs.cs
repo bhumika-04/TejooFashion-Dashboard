@@ -19,8 +19,9 @@ public class DashboardStatsDTO
     public int PendingEscalations { get; set; }
     public int ResolvedEscalations { get; set; }
 
-    public decimal AverageResponseTime { get; set; } // in minutes
+    public decimal AverageResponseTime { get; set; } // in minutes — customer message → our next reply (acks excluded)
     public decimal AiHandlingRate { get; set; } // percentage
+    public int ActiveUsers { get; set; }          // agents who replied to at least one chat in the window
 
     public List<ConversationTrendDTO> ConversationTrends { get; set; } = new();
     public List<SessionActivityDTO> SessionActivity { get; set; } = new();
@@ -36,7 +37,10 @@ public class ConversationTrendDTO
 
 public class SessionActivityDTO
 {
+    public int SessionId { get; set; }
     public string PhoneNumber { get; set; } = string.Empty;
+    public string? AssignedUserName { get; set; }
+    public bool IsConnected { get; set; }
     public string? DisplayName { get; set; }
     public int MessageCount { get; set; }
     public int ConversationCount { get; set; }
