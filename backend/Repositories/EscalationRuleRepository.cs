@@ -22,7 +22,7 @@ public class EscalationRuleRepository
     public async Task<List<EscalationRule>> GetAllAsync()
     {
         using var conn = _db.CreateConnection();
-        var sql = "SELECT * FROM EscalationRules ORDER BY Priority DESC, CreatedAt DESC";
+        var sql = "SELECT * FROM EscalationRules ORDER BY CASE Priority WHEN 'High' THEN 0 WHEN 'Normal' THEN 1 ELSE 2 END, CreatedAt DESC";
         var result = await conn.QueryAsync<EscalationRule>(sql);
         return result.ToList();
     }
@@ -35,7 +35,7 @@ public class EscalationRuleRepository
             SELECT er.*, u.FullName AS AssigneeUserName
             FROM EscalationRules er
             LEFT JOIN Users u ON er.AssigneeUserId = u.Id
-            ORDER BY er.Priority DESC, er.CreatedAt DESC";
+            ORDER BY CASE er.Priority WHEN 'High' THEN 0 WHEN 'Normal' THEN 1 ELSE 2 END, er.CreatedAt DESC";
         var result = await conn.QueryAsync<EscalationRuleWithUser>(sql);
         return result.ToList();
     }
@@ -43,7 +43,7 @@ public class EscalationRuleRepository
     public async Task<List<EscalationRule>> GetActiveRulesAsync()
     {
         using var conn = _db.CreateConnection();
-        var sql = "SELECT * FROM EscalationRules WHERE IsActive = 1 ORDER BY Priority DESC";
+        var sql = "SELECT * FROM EscalationRules WHERE IsActive = 1 ORDER BY CASE Priority WHEN 'High' THEN 0 WHEN 'Normal' THEN 1 ELSE 2 END, Id";
         var result = await conn.QueryAsync<EscalationRule>(sql);
         return result.ToList();
     }

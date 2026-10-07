@@ -24,6 +24,7 @@ public class WhatsAppOrchestrator
     private readonly ConversationRepository _conversationRepo;
     private readonly AiSuggestionRepository _suggestionRepo;
     private readonly TejooWhatsApp.AI.OpenAiClient _openAiClient;
+    private readonly EscalationRuleEngine _ruleEngine;
     private readonly string _interaktBaseUrl;
     private readonly string _metaGraphBaseUrl;
     private readonly string _publicBaseUrl; // ngrok/public URL for media files
@@ -45,7 +46,8 @@ public class WhatsAppOrchestrator
         TagRepository tagRepo,
         ConversationRepository conversationRepo,
         AiSuggestionRepository suggestionRepo,
-        TejooWhatsApp.AI.OpenAiClient openAiClient)
+        TejooWhatsApp.AI.OpenAiClient openAiClient,
+        EscalationRuleEngine ruleEngine)
     {
         _sessionRepo = sessionRepo;
         _conversationService = conversationService;
@@ -63,6 +65,7 @@ public class WhatsAppOrchestrator
         _conversationRepo = conversationRepo;
         _suggestionRepo = suggestionRepo;
         _openAiClient = openAiClient;
+        _ruleEngine = ruleEngine;
         _interaktBaseUrl = configuration["ExternalApis:InteraktBaseUrl"] ?? "https://api.interakt.ai";
         _metaGraphBaseUrl = configuration["ExternalApis:MetaGraphBaseUrl"] ?? "https://graph.facebook.com";
         _publicBaseUrl = (configuration["ExternalApis:PublicBaseUrl"] ?? "").TrimEnd('/');
@@ -278,6 +281,10 @@ public class WhatsAppOrchestrator
                 return true;
             }
 
+            // 3a-1c. Escalation Rules (Escalations page → Rules). Keyword rules run on every customer
+            //        message whatever the number's AI mode; AI-based rules run once the AI has answered.
+            var ruleEscalated = await ApplyEscalationRulesAsync(() => _ruleEngine.EvaluateMessageAsync(conversation, messageContent));
+
             // 3a-2. Fast negativity flag (keyword-based, free + instant) — raise priority so angry
             //       customers surface immediately. (Tagging is handled by AutoTagService against the
             //       admin-managed taxonomy — the single source of auto tags, so we don't tag here.)
@@ -311,6 +318,8 @@ public class WhatsAppOrchestrator
                         return true;
                     }
                     effectiveText = transcript;
+                    if (!ruleEscalated)
+                        ruleEscalated = await ApplyEscalationRulesAsync(() => _ruleEngine.EvaluateMessageAsync(conversation, transcript));
                     _logger.LogInformation("Voice note transcribed for conversation {Id}: \"{Preview}\"",
                         conversation.Id, transcript.Length > 60 ? transcript[..60] + "…" : transcript);
                 }
@@ -364,17 +373,20 @@ public class WhatsAppOrchestrator
                 await _messageService.SaveOutboundMessageAsync(conversation.Id, ackMsg, isAiGenerated: false);
                 try { await SendWhatsAppMessageAsync(session, customerPhone, ackMsg, provider); } catch { /* best effort */ }
 
-                var fallbackUser = await _escalationService.GetNextEscalationUserAsync(conversation.AssignedUserId);
-                if (fallbackUser != null)
+                if (!ruleEscalated)   // a rule may already have escalated this chat
                 {
-                    await _escalationService.CreateEscalationAsync(
-                        conversation.Id, fallbackUser.Id, null,
-                        "AI unavailable — requires human review", "Normal",
-                        escalationLevel: EscalationService.LevelForRole(fallbackUser.Role));
-                }
-                else
-                {
-                    _logger.LogError("AI failed AND no escalation agent found for conversation {Id}", conversation.Id);
+                    var fallbackUser = await _escalationService.GetNextEscalationUserAsync(conversation.AssignedUserId);
+                    if (fallbackUser != null)
+                    {
+                        await _escalationService.CreateEscalationAsync(
+                            conversation.Id, fallbackUser.Id, null,
+                            "AI unavailable — requires human review", "Normal",
+                            escalationLevel: EscalationService.LevelForRole(fallbackUser.Role));
+                    }
+                    else
+                    {
+                        _logger.LogError("AI failed AND no escalation agent found for conversation {Id}", conversation.Id);
+                    }
                 }
                 await LogWebhookAsync(provider, $"AI failed, ack sent, escalated: {aiEx.Message}", true);
                 return true;
@@ -387,6 +399,9 @@ public class WhatsAppOrchestrator
             //     (no confidence-based auto-escalation here).
             if (aiMode == "suggest")
             {
+                if (!ruleEscalated)
+                    await ApplyEscalationRulesAsync(() => _ruleEngine.EvaluateAiResultAsync(conversation, aiResponse.Intent, aiResponse.Confidence));
+
                 if (!string.IsNullOrWhiteSpace(aiResponse.ResponseText))
                 {
                     await _suggestionRepo.CreateSupersedingAsync(
@@ -410,15 +425,18 @@ public class WhatsAppOrchestrator
             // 'auto'/'hybrid': escalate when confidence is below the threshold.
             // An explicit AI escalation request (ShouldEscalate) is always honoured.
             var lowConfidence = aiResponse.Confidence.HasValue && aiResponse.Confidence < confidenceThreshold;
-            if (aiResponse.ShouldEscalate || (escMode != "manual" && lowConfidence))
+            if (!ruleEscalated)
+                ruleEscalated = await ApplyEscalationRulesAsync(() => _ruleEngine.EvaluateAiResultAsync(conversation, aiResponse.Intent, aiResponse.Confidence));
+            // An escalated chat is a human's now — don't auto-send the AI reply on top of it.
+            if (ruleEscalated || aiResponse.ShouldEscalate || (escMode != "manual" && lowConfidence))
             {
                 // Acknowledge the customer so they aren't left in silence while a human picks this up.
                 const string escalateAck = "Thank you for your message! Our team will look into this and get back to you shortly.";
                 await _messageService.SaveOutboundMessageAsync(conversation.Id, escalateAck, isAiGenerated: false);
                 try { await SendWhatsAppMessageAsync(session, customerPhone, escalateAck, provider); } catch { /* best effort */ }
 
-                // Escalate to CRR
-                var nextUser = await _escalationService.GetNextEscalationUserAsync(conversation.AssignedUserId);
+                // Escalate to CRR (unless a rule already did)
+                var nextUser = ruleEscalated ? null : await _escalationService.GetNextEscalationUserAsync(conversation.AssignedUserId);
                 if (nextUser != null)
                 {
                     var escalationReason = aiResponse.Intent ?? "Low confidence or escalation requested";
@@ -763,6 +781,17 @@ public class WhatsAppOrchestrator
         return startTime <= endTime
             ? nowTime >= startTime && nowTime <= endTime        // same-day window, e.g. 09:00–18:00
             : nowTime >= startTime || nowTime <= endTime;       // overnight window, e.g. 20:00–08:00
+    }
+
+    /// <summary>Runs escalation rules best-effort: a rule problem is logged and never fails the message.</summary>
+    private async Task<bool> ApplyEscalationRulesAsync(Func<Task<bool>> evaluate)
+    {
+        try { return await evaluate(); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Escalation rules could not be applied; message processing continues.");
+            return false;
+        }
     }
 
     private async Task LogWebhookAsync(string provider, string message, bool success)

@@ -43,6 +43,18 @@ public class EscalationRepository
         return await conn.QueryFirstOrDefaultAsync<Escalation>(sql, new { ConversationId = conversationId });
     }
 
+    /// <summary>Whether this conversation had an escalation (any status) whose Reason starts with the prefix since the given time.</summary>
+    public async Task<bool> HasRecentWithReasonPrefixAsync(int conversationId, string reasonPrefix, DateTime sinceUtc)
+    {
+        using var conn = _db.CreateConnection();
+        // Escape LIKE wildcards so a rule name containing % _ [ is matched literally.
+        var pattern = reasonPrefix.Replace("[", "[[]").Replace("%", "[%]").Replace("_", "[_]") + "%";
+        return await conn.ExecuteScalarAsync<int>(@"
+            SELECT COUNT(1) FROM Escalations
+            WHERE ConversationId = @ConversationId AND EscalatedAt >= @Since AND Reason LIKE @Pattern",
+            new { ConversationId = conversationId, Since = sinceUtc, Pattern = pattern }) > 0;
+    }
+
     public async Task<List<Escalation>> GetAllAsync(string? status = null, int? escalatedToUserId = null)
     {
         using var conn = _db.CreateConnection();

@@ -41,7 +41,8 @@ public class EscalationService
         int? escalatedFromUserId = null,
         string? reason = null,
         string priority = "Normal",
-        int escalationLevel = 1)
+        int escalationLevel = 1,
+        bool notify = true)
     {
         var escalation = new Escalation
         {
@@ -71,8 +72,8 @@ public class EscalationService
         _logger.LogInformation("✓ Escalation created: Conversation #{ConversationId} escalated to {UserName} (Priority: {Priority})",
             conversationId, escalatedToUser?.FullName ?? "Unknown", priority);
 
-        // Notify the assigned agent in real-time
-        if (conversation != null)
+        // Notify the assigned agent in real-time (an escalation rule can switch the dashboard alert off)
+        if (notify && conversation != null)
         {
             await _notificationService.NotifyEscalationAsync(
                 escalatedToUserId, escalation.Id, conversationId,

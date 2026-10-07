@@ -54,12 +54,12 @@ public class EscalationRuleService
         {
             Name = request.Name,
             Description = request.Description,
-            RuleType = request.RuleType,
-            Priority = request.Priority,
+            RuleType = EscalationRuleEngine.NormalizeType(request.RuleType),
+            Priority = EscalationRuleEngine.NormalizePriority(request.Priority),
             IsActive = request.IsActive,
             ConditionThreshold = request.ConditionThreshold,
             ConditionKeywords = request.ConditionKeywords,
-            AssigneeTeam = request.AssigneeTeam,
+            AssigneeTeam = request.AssigneeTeam?.Trim() ?? "",
             AssigneeUserId = request.AssigneeUserId,
             NotifyDashboard = request.NotifyDashboard,
             NotifyEmail = request.NotifyEmail,
@@ -88,12 +88,12 @@ public class EscalationRuleService
 
         rule.Name = request.Name;
         rule.Description = request.Description;
-        rule.RuleType = request.RuleType;
-        rule.Priority = request.Priority;
+        rule.RuleType = EscalationRuleEngine.NormalizeType(request.RuleType);
+        rule.Priority = EscalationRuleEngine.NormalizePriority(request.Priority);
         rule.IsActive = request.IsActive;
         rule.ConditionThreshold = request.ConditionThreshold;
         rule.ConditionKeywords = request.ConditionKeywords;
-        rule.AssigneeTeam = request.AssigneeTeam;
+        rule.AssigneeTeam = request.AssigneeTeam?.Trim() ?? "";
         rule.AssigneeUserId = request.AssigneeUserId;
         rule.NotifyDashboard = request.NotifyDashboard;
         rule.NotifyEmail = request.NotifyEmail;

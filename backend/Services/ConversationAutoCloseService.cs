@@ -8,8 +8,10 @@ namespace TejooWhatsApp.Services;
 /// Runs every hour. If auto-close is enabled in SystemSettings, closes Open conversations that have
 /// been idle longer than the configured threshold (default 24h) AND aren't waiting on us — i.e. the
 /// customer's messages since our last reply are only acknowledgements ("Ok", "Thanks"). A customer
-/// still waiting for an answer is never auto-closed: that chat stays on Overdue Replies until someone
-/// replies. Escalated conversations are left alone — they're in the CRR→Manager→HOD workflow.
+/// still waiting for an answer is kept open (on Overdue Replies) only while we can still answer:
+/// once WhatsApp's 24-hour customer-service window has expired a free-text reply can't be sent, so
+/// the chat closes too (it reopens by itself when the customer writes again). Escalated
+/// conversations are left alone — they're in the CRR→Manager→HOD workflow.
 /// </summary>
 public class ConversationAutoCloseService : BackgroundService
 {
@@ -59,7 +61,7 @@ public class ConversationAutoCloseService : BackgroundService
 
         // Idle Open chats, each with the customer messages received since our last reply (if any).
         var rows = (await conn.QueryAsync<IdleRow>(@"
-            SELECT c.Id, m.Content, m.MessageType
+            SELECT c.Id, m.Content, m.MessageType, m.CreatedAt
             FROM Conversations c
             OUTER APPLY (
                 SELECT MAX(o.CreatedAt) AS LastOutboundAt
@@ -73,10 +75,13 @@ public class ConversationAutoCloseService : BackgroundService
                 OR (c.LastMessageAt IS NOT NULL AND c.LastMessageAt < @Cutoff))",
             new { Cutoff = cutoff })).ToList();
 
+        // WhatsApp only allows a free-text reply within 24h of the customer's last message.
+        var windowStart = DateTime.UtcNow.AddHours(-24);
         var closable = rows
             .GroupBy(r => r.Id)
-            .Where(g => g.All(r => r.Content == null && r.MessageType == null      // no customer message since our reply
-                                || AiHeuristics.IsAcknowledgement(r.Content, r.MessageType)))
+            .Where(g => g.All(r => r.CreatedAt == null                             // no customer message since our reply
+                                || AiHeuristics.IsAcknowledgement(r.Content, r.MessageType)
+                                || r.CreatedAt < windowStart))                     // waiting, but past the reply window
             .Select(g => g.Key)
             .ToList();
         var stillWaiting = rows.Select(r => r.Id).Distinct().Count() - closable.Count;
@@ -94,7 +99,7 @@ public class ConversationAutoCloseService : BackgroundService
 
         if (closed > 0 || stillWaiting > 0)
             _logger.LogInformation(
-                "Auto-close: closed {Closed} conversation(s) idle >{Hours}h; kept {Waiting} open because the customer is still waiting for a reply.",
+                "Auto-close: closed {Closed} conversation(s) idle >{Hours}h; kept {Waiting} open because the customer is still waiting and can still be answered.",
                 closed, inactiveHours, stillWaiting);
     }
 
@@ -103,5 +108,6 @@ public class ConversationAutoCloseService : BackgroundService
         public int Id { get; set; }
         public string? Content { get; set; }
         public string? MessageType { get; set; }
+        public DateTime? CreatedAt { get; set; }
     }
 }

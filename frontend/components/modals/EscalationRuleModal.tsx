@@ -5,6 +5,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFoo
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AlertTriangle } from 'lucide-react';
+import { teamsApi, usersApi } from '@/services/api';
+
+const ESCALATION_ROLES = ['MANAGER', 'HOD', 'ADMIN'];
+
+// What each rule type needs and how it fires — shown under the type picker.
+const TYPE_HELP: Record<string, string> = {
+  Custom: 'Fires when a customer message contains any of the keywords (whole words or phrases).',
+  NegativeSentiment: 'Fires on the keywords below, or — if left empty — on the built-in complaint / angry words list.',
+  PaymentIntent: 'Fires on the keywords below, or — if left empty — when the AI classifies the message as a payment or credit query.',
+  LowConfidence: 'Fires when the AI drafts a reply with confidence below the threshold (numbers using AI Suggest or Auto mode).',
+};
 
 interface EscalationRuleModalProps {
   open: boolean;
@@ -29,6 +40,16 @@ export default function EscalationRuleModal({ open, onOpenChange, rule, onSubmit
     notifySMS: false,
   });
   const [submitting, setSubmitting] = useState(false);
+  const [teams, setTeams] = useState<{ id: number; name: string; managerName?: string }[]>([]);
+  const [people, setPeople] = useState<{ id: number; fullName: string; role: string }[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    teamsApi.getAll(true).then(r => setTeams(r.data ?? [])).catch(() => {});
+    usersApi.getAll(true)
+      .then(r => setPeople((r.data ?? []).filter((u: any) => ESCALATION_ROLES.includes((u.role ?? '').toUpperCase()))))
+      .catch(() => {});
+  }, [open]);
 
   useEffect(() => {
     if (rule) {
@@ -77,7 +98,14 @@ export default function EscalationRuleModal({ open, onOpenChange, rule, onSubmit
     }
   };
 
-  const isValid = formData.name.trim() && formData.description.trim() && formData.assigneeTeam.trim();
+  const isLowConfidence = formData.ruleType === 'LowConfidence';
+  const threshold = Number(formData.conditionThreshold);
+  const hasKeywords = formData.conditionKeywords.split(',').some(k => k.trim());
+  const isValid = !!formData.name.trim() && !!formData.description.trim()
+    && (!isLowConfidence || (threshold > 0 && threshold <= 100))
+    && (formData.ruleType !== 'Custom' || hasKeywords);
+  // Keep a saved team name selectable even if that team was renamed/removed since.
+  const teamMissing = !!formData.assigneeTeam && !teams.some(t => t.name === formData.assigneeTeam);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -153,26 +181,26 @@ export default function EscalationRuleModal({ open, onOpenChange, rule, onSubmit
               </div>
             </div>
 
+            <p className="text-xs text-gray-500 -mt-2">{TYPE_HELP[formData.ruleType] ?? TYPE_HELP.Custom}</p>
+
             {/* Conditions */}
-            <div className="grid grid-cols-2 gap-4">
+            {isLowConfidence ? (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Condition Threshold
+                  Escalate when AI confidence is below (%) <span className="text-red-500">*</span>
                 </label>
                 <Input
+                  type="number" min={1} max={100}
                   value={formData.conditionThreshold}
                   onChange={(e) => setFormData({ ...formData, conditionThreshold: e.target.value })}
-                  placeholder="e.g., 70 for confidence below 70%"
+                  placeholder="e.g., 50"
                   disabled={submitting}
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  Numeric value for threshold-based rules
-                </p>
               </div>
-
+            ) : (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Condition Keywords
+                  Keywords {formData.ruleType === 'Custom' && <span className="text-red-500">*</span>}
                 </label>
                 <Input
                   value={formData.conditionKeywords}
@@ -181,22 +209,42 @@ export default function EscalationRuleModal({ open, onOpenChange, rule, onSubmit
                   disabled={submitting}
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Comma-separated keywords to detect
+                  Comma-separated words or phrases, matched as whole words (&quot;return&quot; won&apos;t match &quot;returned&quot;). Avoid very common words like &quot;today&quot;.
                 </p>
               </div>
-            </div>
+            )}
 
             {/* Assignment */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Assignee Team <span className="text-red-500">*</span>
-              </label>
-              <Input
-                value={formData.assigneeTeam}
-                onChange={(e) => setFormData({ ...formData, assigneeTeam: e.target.value })}
-                placeholder="e.g., Senior Support Team"
-                disabled={submitting}
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Escalate to team</label>
+                <select
+                  value={formData.assigneeTeam}
+                  onChange={(e) => setFormData({ ...formData, assigneeTeam: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  disabled={submitting}
+                >
+                  <option value="">Chat owner&apos;s own manager</option>
+                  {teams.map(t => (
+                    <option key={t.id} value={t.name}>{t.name}{t.managerName ? ` — ${t.managerName}` : ''}</option>
+                  ))}
+                  {teamMissing && <option value={formData.assigneeTeam}>{formData.assigneeTeam} (not found)</option>}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Goes to that team&apos;s manager (or HOD).</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Or a specific person</label>
+                <select
+                  value={formData.assigneeUserId ?? ''}
+                  onChange={(e) => setFormData({ ...formData, assigneeUserId: e.target.value ? Number(e.target.value) : null })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  disabled={submitting}
+                >
+                  <option value="">— none —</option>
+                  {people.map(u => <option key={u.id} value={u.id}>{u.fullName} ({u.role})</option>)}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Overrides the team when set.</p>
+              </div>
             </div>
 
             {/* Notification Channels */}
@@ -215,25 +263,14 @@ export default function EscalationRuleModal({ open, onOpenChange, rule, onSubmit
                   />
                   <span className="text-sm text-gray-700">Dashboard Notification</span>
                 </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={formData.notifyEmail}
-                    onChange={(e) => setFormData({ ...formData, notifyEmail: e.target.checked })}
-                    className="rounded"
-                    disabled={submitting}
-                  />
-                  <span className="text-sm text-gray-700">Email Notification</span>
+                {/* No email/SMS sender is configured on the server yet, so these can't be switched on. */}
+                <label className="flex items-center gap-2 opacity-50 cursor-not-allowed">
+                  <input type="checkbox" checked={false} disabled className="rounded" />
+                  <span className="text-sm text-gray-700">Email Notification <span className="text-xs text-gray-500">(not set up)</span></span>
                 </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={formData.notifySMS}
-                    onChange={(e) => setFormData({ ...formData, notifySMS: e.target.checked })}
-                    className="rounded"
-                    disabled={submitting}
-                  />
-                  <span className="text-sm text-gray-700">SMS Notification</span>
+                <label className="flex items-center gap-2 opacity-50 cursor-not-allowed">
+                  <input type="checkbox" checked={false} disabled className="rounded" />
+                  <span className="text-sm text-gray-700">SMS Notification <span className="text-xs text-gray-500">(not set up)</span></span>
                 </label>
               </div>
             </div>

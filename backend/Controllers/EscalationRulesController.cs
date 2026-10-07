@@ -38,10 +38,8 @@ public class EscalationRulesController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateEscalationRuleRequest request)
     {
-        if (string.IsNullOrEmpty(request.Name) || string.IsNullOrEmpty(request.RuleType))
-        {
-            return BadRequest(new { error = "Name and RuleType are required" });
-        }
+        var error = Validate(request.Name, request.RuleType, request.ConditionThreshold, request.ConditionKeywords);
+        if (error != null) return BadRequest(new { error });
 
         var rule = await _ruleService.CreateRuleAsync(request);
         return Ok(rule);
@@ -51,6 +49,9 @@ public class EscalationRulesController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateEscalationRuleRequest request)
     {
+        var error = Validate(request.Name, request.RuleType, request.ConditionThreshold, request.ConditionKeywords);
+        if (error != null) return BadRequest(new { error });
+
         var rule = await _ruleService.UpdateRuleAsync(id, request);
         if (rule == null)
         {
@@ -81,6 +82,21 @@ public class EscalationRulesController : ControllerBase
             return NotFound(new { error = "Rule not found" });
         }
         return Ok(new { success = true });
+    }
+
+    // Rules are applied to live messages (EscalationRuleEngine), so reject ones that could never fire.
+    private static string? Validate(string? name, string? ruleType, string? threshold, string? keywords)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "Rule name is required.";
+        var probe = new TejooWhatsApp.Models.Entities.EscalationRule { RuleType = ruleType ?? "", ConditionThreshold = threshold, ConditionKeywords = keywords };
+        return EscalationRuleEngine.NormalizeType(ruleType) switch
+        {
+            "LowConfidence" when EscalationRuleEngine.ThresholdPercent(probe) is not { } t || t > 100
+                => "Low Confidence rules need a threshold between 1 and 100 (AI confidence %, e.g. 50).",
+            "Custom" when EscalationRuleEngine.Keywords(probe).Count == 0
+                => "Custom rules need at least one keyword.",
+            _ => null,
+        };
     }
 }
 

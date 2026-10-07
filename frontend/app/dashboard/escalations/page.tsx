@@ -340,8 +340,8 @@ export default function EscalationsPage() {
         showToast('Rule created successfully', 'success');
       }
       loadRules();
-    } catch (err) {
-      showToast('Failed to save rule', 'error');
+    } catch (err: any) {
+      showToast(err?.response?.data?.error || 'Failed to save rule', 'error');
       throw err;
     }
   };
@@ -351,6 +351,7 @@ export default function EscalationsPage() {
       const updateData = {
         name: rule.name,
         description: rule.description,
+        ruleType: rule.ruleType,   // omitting it would reset the rule to Custom
         priority: rule.priority,
         isActive: rule.isActive,
         conditionThreshold: rule.conditionThreshold,
@@ -959,13 +960,17 @@ export default function EscalationsPage() {
                   <div className="grid grid-cols-2 gap-2 mb-3">
                     <div className="bg-gray-50 rounded-xl px-3 py-2.5">
                       <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-0.5">Assignee</p>
-                      <p className="text-sm font-semibold text-gray-900 truncate">{rule.assigneeTeam}</p>
+                      <p className="text-sm font-semibold text-gray-900 truncate">
+                        {rule.assigneeUserName || (rule.assigneeTeam ? `${rule.assigneeTeam} manager` : "Chat owner's manager")}
+                      </p>
                     </div>
                     <div className="bg-gray-50 rounded-xl px-3 py-2.5">
                       <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-0.5">Conditions</p>
                       <p className="text-sm font-semibold text-gray-700 truncate">
-                        {rule.conditionThreshold ? `Threshold: ${rule.conditionThreshold}` :
+                        {rule.ruleType === 'LowConfidence' ? `AI confidence < ${rule.conditionThreshold}%` :
                          rule.conditionKeywords  ? rule.conditionKeywords.split(',').slice(0,2).join(', ') :
+                         rule.ruleType === 'NegativeSentiment' ? 'Built-in negative words' :
+                         rule.ruleType === 'PaymentIntent' ? 'AI: payment / credit query' :
                          'None'}
                       </p>
                     </div>

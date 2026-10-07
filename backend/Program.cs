@@ -139,6 +139,7 @@ builder.Services.AddScoped<ConversationService>();
 builder.Services.AddScoped<MessageService>();
 builder.Services.AddScoped<EscalationService>();
 builder.Services.AddScoped<EscalationRuleService>();
+builder.Services.AddScoped<EscalationRuleEngine>();
 builder.Services.AddScoped<WhatsAppOrchestrator>();
 builder.Services.AddScoped<NotificationService>();
 
